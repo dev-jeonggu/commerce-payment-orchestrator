@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: paycore-postgres
+    environment:
+      POSTGRES_DB: paycore
+      POSTGRES_USER: paycore
+      POSTGRES_PASSWORD: paycore1234
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paycore"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - paycore-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: paycore-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - paycore-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paycore-app
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/paycore
+      SPRING_DATASOURCE_USERNAME: paycore
+      SPRING_DATASOURCE_PASSWORD: paycore1234
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      PORTONE_IMP_KEY: ${PORTONE_IMP_KEY:-test_imp_key}
+      PORTONE_IMP_SECRET: ${PORTONE_IMP_SECRET:-test_imp_secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - paycore-network
+    restart: on-failure
+
+networks:
+  paycore-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
