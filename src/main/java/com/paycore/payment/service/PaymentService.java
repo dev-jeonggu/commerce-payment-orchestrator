@@ -13,6 +13,7 @@ import com.paycore.payment.controller.dto.PaymentResponse;
 import com.paycore.payment.controller.dto.PaymentVerifyRequest;
 import com.paycore.payment.domain.Payment;
 import com.paycore.payment.domain.PaymentLog;
+import com.paycore.payment.domain.PaymentStatus;
 import com.paycore.payment.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -210,8 +211,13 @@ public class PaymentService {
 
         portOneClient.cancelPayment(cancelRequest);
 
-        payment.cancel(request.getAmount() != null ? request.getAmount() : payment.getPaidAmount());
-        order.markAsCancelled();
+        long cancelAmount = request.getAmount() != null ? request.getAmount() : payment.getPaidAmount();
+        payment.cancel(cancelAmount);
+
+        // 전액 취소된 경우에만 주문도 CANCELLED 처리 (부분 취소는 주문 PAID 유지)
+        if (payment.getStatus() == PaymentStatus.CANCELLED) {
+            order.markAsCancelled();
+        }
 
         paymentLogService.saveLog(request.getMerchantUid(), PaymentLog.LogType.PAYMENT_CANCEL,
                 cancelRequest, null, true, null);
