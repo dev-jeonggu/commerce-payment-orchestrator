@@ -55,7 +55,7 @@ class PaymentRecoveryTest extends AbstractIntegrationTest {
         given(pgResponse.getResponse()).willReturn(data);
         given(data.getImpUid()).willReturn("imp_recovery_001");
         given(data.getPayMethod()).willReturn("card");
-        given(portOneClient.getPaymentByImpUid(any())).willReturn(pgResponse);
+        given(portOneClient.getPaymentByMerchantUid(any())).willReturn(pgResponse);
 
         // threshold를 0분으로 설정해서 스케줄러 즉시 실행
         ReflectionTestUtils.setField(scheduler, "pendingThresholdMinutes", 0);
