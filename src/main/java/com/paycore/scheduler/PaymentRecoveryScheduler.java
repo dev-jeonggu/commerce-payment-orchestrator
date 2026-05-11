@@ -78,11 +78,9 @@ public class PaymentRecoveryScheduler {
         log.info("[Scheduler] 복구 처리 - orderNo: {}, createdAt: {}",
                 order.getOrderNo(), order.getCreatedAt());
 
-        // PG 단건 조회 (imp_uid는 merchant_uid로 조회)
-        // 실제로는 PG사에 merchant_uid 기반 조회 API를 사용
         PortOnePaymentResponse pgPayment;
         try {
-            pgPayment = portOneClient.getPaymentByImpUid(order.getOrderNo());
+            pgPayment = portOneClient.getPaymentByMerchantUid(order.getOrderNo());
         } catch (Exception e) {
             log.warn("[Scheduler] PG 조회 실패 - orderNo: {} → CANCELLED 처리", order.getOrderNo());
             order.markAsCancelled();
