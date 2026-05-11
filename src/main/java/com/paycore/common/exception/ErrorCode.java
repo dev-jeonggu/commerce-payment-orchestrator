@@ -18,6 +18,7 @@ public enum ErrorCode {
     PAYMENT_ALREADY_PROCESSED(HttpStatus.CONFLICT, "이미 처리된 결제입니다."),
     PAYMENT_VERIFICATION_FAILED(HttpStatus.BAD_REQUEST, "결제 검증에 실패했습니다."),
     PAYMENT_CANCEL_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "결제 취소에 실패했습니다."),
+    CANCEL_AMOUNT_EXCEEDED(HttpStatus.BAD_REQUEST, "취소 요청 금액이 취소 가능 금액을 초과합니다."),
 
     // PG API
     PG_API_ERROR(HttpStatus.BAD_GATEWAY, "PG사 API 호출 중 오류가 발생했습니다."),

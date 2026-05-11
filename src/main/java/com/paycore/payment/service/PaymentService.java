@@ -209,9 +209,15 @@ public class PaymentService {
                 .reason(request.getReason())
                 .build();
 
+        long cancelAmount = request.getAmount() != null ? request.getAmount() : payment.getPaidAmount();
+        long remainingCancellable = payment.getPaidAmount() - payment.getCancelledAmount();
+        if (cancelAmount > remainingCancellable) {
+            throw new PaycoreException(ErrorCode.CANCEL_AMOUNT_EXCEEDED,
+                    String.format("취소 요청 금액(%d)이 취소 가능 금액(%d)을 초과합니다.", cancelAmount, remainingCancellable));
+        }
+
         portOneClient.cancelPayment(cancelRequest);
 
-        long cancelAmount = request.getAmount() != null ? request.getAmount() : payment.getPaidAmount();
         payment.cancel(cancelAmount);
 
         // 전액 취소된 경우에만 주문도 CANCELLED 처리 (부분 취소는 주문 PAID 유지)

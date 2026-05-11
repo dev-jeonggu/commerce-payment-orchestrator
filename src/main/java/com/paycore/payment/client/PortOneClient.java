@@ -76,6 +76,29 @@ public class PortOneClient {
     }
 
     /**
+     * merchant_uid로 결제 단건 조회
+     * 스케줄러 복구에서 사용 (imp_uid를 모를 때)
+     */
+    public PortOnePaymentResponse getPaymentByMerchantUid(String merchantUid) {
+        log.debug("[PortOneClient] 결제 단건 조회 (merchant_uid) - merchantUid: {}", merchantUid);
+        String accessToken = getAccessToken();
+
+        PortOnePaymentResponse response = portoneWebClient.get()
+                .uri("/payments/merchant_uid/{merchant_uid}", merchantUid)
+                .header("Authorization", accessToken)
+                .retrieve()
+                .bodyToMono(PortOnePaymentResponse.class)
+                .block();
+
+        if (response == null || !response.isSuccess()) {
+            log.error("[PortOneClient] 결제 단건 조회 실패 (merchant_uid) - merchantUid: {}", merchantUid);
+            throw new PaycoreException(ErrorCode.PG_API_ERROR, "결제 조회 실패: " + merchantUid);
+        }
+
+        return response;
+    }
+
+    /**
      * 결제 취소 요청
      * amount가 null이면 전액 취소, 값이 있으면 부분 취소
      */
