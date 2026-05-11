@@ -42,13 +42,13 @@ public class PaymentLog {
     /**
      * PG API 요청 전문 (JSON)
      */
-    @Column(name = "request_payload", columnDefinition = "TEXT")
+    @Column(name = "request_body", columnDefinition = "TEXT")
     private String requestPayload;
 
     /**
      * PG API 응답 전문 (JSON)
      */
-    @Column(name = "response_payload", columnDefinition = "TEXT")
+    @Column(name = "response_body", columnDefinition = "TEXT")
     private String responsePayload;
 
     @Column(name = "success")

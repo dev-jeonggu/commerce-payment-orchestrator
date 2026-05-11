@@ -3,18 +3,12 @@ package com.paycore.scheduler;
 import com.paycore.order.domain.Order;
 import com.paycore.order.domain.OrderStatus;
 import com.paycore.order.repository.OrderRepository;
-import com.paycore.payment.client.PortOneClient;
-import com.paycore.payment.client.dto.PortOnePaymentResponse;
-import com.paycore.payment.domain.Payment;
-import com.paycore.payment.domain.PaymentLog;
-import com.paycore.payment.repository.PaymentRepository;
-import com.paycore.payment.service.PaymentLogService;
+import com.paycore.payment.service.PaymentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -22,18 +16,17 @@ import java.util.List;
 /**
  * PENDING 주문 자동 복구 스케줄러
  *
- * [면접 포인트] 장애 복구의 핵심
- *
  * 발생 케이스:
  * 1. 사용자가 결제 후 브라우저 종료 → verify API 미호출
  * 2. Webhook 유실
  * 3. 서버 장애로 verify 처리 실패
  *
- * 복구 로직:
- * - 5분 주기로 PENDING + 30분 경과 주문 조회
- * - PG 단건 조회로 실제 결제 상태 확인
- * - 결제 완료: PAID 처리
- * - 미결제: CANCELLED 처리
+ * [트랜잭션 흐름]
+ * 1. recoverOrderWithTx (PaymentRecoveryService, @Transactional)
+ *    → Payment 저장 + Order PAID 원자적 커밋
+ * 2. processAfterPayment (PaymentService, @Transactional)
+ *    → 커밋된 Payment 조회 후 재고/포인트 후처리
+ *    → 실패 시 Saga(REQUIRES_NEW)가 커밋된 Payment를 정상 조회하여 보상 취소
  */
 @Slf4j
 @Component
@@ -41,15 +34,13 @@ import java.util.List;
 public class PaymentRecoveryScheduler {
 
     private final OrderRepository orderRepository;
-    private final PaymentRepository paymentRepository;
-    private final PortOneClient portOneClient;
-    private final PaymentLogService paymentLogService;
+    private final PaymentRecoveryService paymentRecoveryService;
+    private final PaymentService paymentService;
 
     @Value("${scheduler.pending-recovery.pending-threshold-minutes:30}")
     private int pendingThresholdMinutes;
 
     @Scheduled(fixedDelayString = "${scheduler.pending-recovery.fixed-delay:300000}")
-    @Transactional
     public void recoverPendingOrders() {
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(pendingThresholdMinutes);
         List<Order> pendingOrders = orderRepository.findByStatusAndCreatedAtBefore(
@@ -64,7 +55,15 @@ public class PaymentRecoveryScheduler {
 
         for (Order order : pendingOrders) {
             try {
-                recoverOrder(order);
+                boolean recovered = paymentRecoveryService.recoverOrderWithTx(order);
+                if (recovered) {
+                    try {
+                        paymentService.processAfterPayment(order.getOrderNo());
+                    } catch (Exception e) {
+                        log.error("[Scheduler] 복구 후처리 실패 (Saga 보상 취소 완료) - orderNo: {}",
+                                order.getOrderNo());
+                    }
+                }
             } catch (Exception e) {
                 log.error("[Scheduler] 주문 복구 실패 - orderNo: {} (수동 처리 필요)",
                         order.getOrderNo(), e);
@@ -72,44 +71,5 @@ public class PaymentRecoveryScheduler {
         }
 
         log.info("[Scheduler] PENDING 주문 복구 완료");
-    }
-
-    private void recoverOrder(Order order) {
-        log.info("[Scheduler] 복구 처리 - orderNo: {}, createdAt: {}",
-                order.getOrderNo(), order.getCreatedAt());
-
-        PortOnePaymentResponse pgPayment;
-        try {
-            pgPayment = portOneClient.getPaymentByMerchantUid(order.getOrderNo());
-        } catch (Exception e) {
-            log.warn("[Scheduler] PG 조회 실패 - orderNo: {} → CANCELLED 처리", order.getOrderNo());
-            order.markAsCancelled();
-            paymentLogService.saveLog(order.getOrderNo(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, null, false, "PG 조회 실패: " + e.getMessage());
-            return;
-        }
-
-        if (pgPayment.isPaid()) {
-            // 결제 완료 → PAID 처리
-            if (!paymentRepository.existsByImpUid(pgPayment.getResponse().getImpUid())) {
-                Payment payment = Payment.builder()
-                        .orderId(order.getId())
-                        .impUid(pgPayment.getResponse().getImpUid())
-                        .merchantUid(order.getOrderNo())
-                        .payMethod(pgPayment.getResponse().getPayMethod())
-                        .paidAmount(pgPayment.getAmount())
-                        .build();
-                paymentRepository.save(payment);
-                order.markAsPaid();
-                log.info("[Scheduler] PAID 복구 완료 - orderNo: {}", order.getOrderNo());
-            }
-        } else {
-            // 미결제 → CANCELLED
-            order.markAsCancelled();
-            log.info("[Scheduler] CANCELLED 처리 - orderNo: {}", order.getOrderNo());
-        }
-
-        paymentLogService.saveLog(order.getOrderNo(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                null, pgPayment, true, null);
     }
 }

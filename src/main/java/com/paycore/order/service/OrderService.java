@@ -8,6 +8,7 @@ import com.paycore.order.controller.dto.OrderCreateResponse;
 import com.paycore.order.domain.Order;
 import com.paycore.order.domain.OrderStatus;
 import com.paycore.order.repository.OrderRepository;
+import com.paycore.payment.service.ItemService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,25 +21,24 @@ public class OrderService {
 
     private final OrderRepository orderRepository;
     private final OrderNumberGenerator orderNumberGenerator;
+    private final ItemService itemService;
 
-    /**
-     * 주문 생성 (사전 검증)
-     * 금액은 서버가 신뢰 기준 - 클라이언트가 보낸 금액을 그대로 쓰지 않고
-     * 실무에서는 itemId로 상품 가격을 재조회하여 검증
-     */
     @Transactional
     public OrderCreateResponse createOrder(OrderCreateRequest request) {
         String orderNo = orderNumberGenerator.generate();
 
-        // 실무에서는 itemId로 상품 가격 재조회 및 재고 확인
-        // Long serverAmount = itemService.getPrice(request.getItemId());
-        // 여기서는 request.getAmount()를 신뢰 기준으로 사용 (데모)
+        Long serverAmount = itemService.getPrice(request.getItemId());
+        if (!serverAmount.equals(request.getAmount())) {
+            throw new PaycoreException(ErrorCode.ITEM_PRICE_MISMATCH,
+                    String.format("요청 금액(%d)이 상품 가격(%d)과 일치하지 않습니다.",
+                            request.getAmount(), serverAmount));
+        }
 
         Order order = Order.builder()
                 .orderNo(orderNo)
                 .userId(request.getUserId())
                 .itemId(request.getItemId())
-                .totalAmount(request.getAmount())
+                .totalAmount(serverAmount)
                 .build();
 
         orderRepository.save(order);
