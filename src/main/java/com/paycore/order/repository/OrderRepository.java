@@ -22,4 +22,16 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             @Param("status") OrderStatus status,
             @Param("threshold") LocalDateTime threshold
     );
+
+    /**
+     * 가상계좌 Webhook 누락 복구용: PENDING_PAYMENT 상태이면서 지정 시간 이전 주문 조회
+     *
+     * [용도] 가상계좌 발급 후 PG Webhook 누락 시 스케줄러가 PG 단건 조회로 입금 여부 확인.
+     * dueDate 만료 전 주문만 조회 (만료된 건은 VirtualAccountExpiryScheduler가 처리).
+     */
+    @Query("SELECT o FROM Order o WHERE o.status = :status AND o.createdAt <= :threshold")
+    List<Order> findPendingPaymentOrdersBefore(
+            @Param("status") OrderStatus status,
+            @Param("threshold") LocalDateTime threshold
+    );
 }

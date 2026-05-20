@@ -1,5 +1,6 @@
 package com.paycore.order.controller.dto;
 
+import com.paycore.payment.pg.PgProvider;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -23,4 +24,7 @@ public class OrderCreateRequest {
     @Min(value = 100, message = "최소 결제 금액은 100원입니다.")
     @Schema(description = "결제 금액 (서버에서 상품 가격으로 재검증)", example = "30000")
     private Long amount;
+
+    @Schema(description = "PG사 선택 (미입력 시 PORTONE 기본값)", example = "PORTONE", defaultValue = "PORTONE")
+    private PgProvider pgProvider;
 }
