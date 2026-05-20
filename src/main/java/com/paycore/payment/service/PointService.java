@@ -16,4 +16,9 @@ public class PointService {
         log.info("[PointService] 포인트 적립 - userId: {}, amount: {}", userId, amount);
         // 실무: 포인트 DB 적립 (결제금액의 1% 등)
     }
+
+    public void deduct(Long userId, Long amount) {
+        log.info("[PointService] 포인트 회수 - userId: {}, amount: {}", userId, amount);
+        // 실무: 결제 취소 시 적립된 포인트 차감
+    }
 }
