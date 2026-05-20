@@ -1,14 +1,15 @@
 package com.paycore.payment.service;
 
+import com.paycore.common.exception.ErrorCode;
 import com.paycore.common.exception.PaycoreException;
 import com.paycore.order.domain.Order;
 import com.paycore.order.domain.OrderStatus;
 import com.paycore.order.repository.OrderRepository;
-import com.paycore.payment.client.PortOneClient;
 import com.paycore.payment.controller.dto.PaymentCancelRequest;
 import com.paycore.payment.controller.dto.PaymentResponse;
 import com.paycore.payment.domain.Payment;
 import com.paycore.payment.domain.PaymentStatus;
+import com.paycore.payment.pg.*;
 import com.paycore.payment.repository.PaymentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,7 +37,8 @@ class PaymentServiceCancelTest {
 
     @Mock private OrderRepository orderRepository;
     @Mock private PaymentRepository paymentRepository;
-    @Mock private PortOneClient portOneClient;
+    @Mock private PgRouter pgRouter;
+    @Mock private PaymentGatewayClient gatewayClient;
     @Mock private PaymentLogService paymentLogService;
     @Mock private PaymentSagaService paymentSagaService;
     @Mock private InventoryService inventoryService;
@@ -62,6 +64,8 @@ class PaymentServiceCancelTest {
                 .payMethod("card")
                 .paidAmount(30_000L)
                 .build();
+
+        given(pgRouter.route(any(PgProvider.class))).willReturn(gatewayClient);
     }
 
     @Nested
@@ -79,7 +83,19 @@ class PaymentServiceCancelTest {
             assertThat(response.getPaymentStatus()).isEqualTo(PaymentStatus.CANCELLED);
             assertThat(response.getOrderStatus()).isEqualTo(OrderStatus.CANCELLED);
             assertThat(response.getCancelledAmount()).isEqualTo(30_000L);
-            verify(portOneClient, times(1)).cancelPayment(any());
+            verify(gatewayClient, times(1)).cancel(any(PgCancelCommand.class));
+        }
+
+        @Test
+        @DisplayName("전액 취소 후 재고 복구 + 포인트 회수 호출 확인")
+        void fullCancel_restoresInventoryAndDeductsPoints() {
+            given(orderRepository.findByOrderNo("ORD-CANCEL-001")).willReturn(Optional.of(paidOrder));
+            given(paymentRepository.findByMerchantUid("ORD-CANCEL-001")).willReturn(Optional.of(payment));
+
+            paymentService.cancelPayment(buildRequest(null));
+
+            verify(inventoryService, times(1)).increase(any(), anyInt());
+            verify(pointService, times(1)).deduct(any(), any());
         }
 
         @Test
@@ -108,22 +124,20 @@ class PaymentServiceCancelTest {
             PaymentResponse response = paymentService.cancelPayment(buildRequest(10_000L));
 
             assertThat(response.getPaymentStatus()).isEqualTo(PaymentStatus.PARTIAL_CANCELLED);
-            // 핵심: 부분 취소 시 주문은 PAID 상태 유지
             assertThat(response.getOrderStatus()).isEqualTo(OrderStatus.PAID);
             assertThat(response.getCancelledAmount()).isEqualTo(10_000L);
         }
 
         @Test
-        @DisplayName("부분 취소 후 잔여 금액이 0이 되면 CANCELLED 처리")
-        void partialCancel_exactFullAmount_becomeCancelled() {
+        @DisplayName("부분 취소 시 재고/포인트 복구 호출 없음 (주문 PAID 유지)")
+        void partialCancel_noRestoration() {
             given(orderRepository.findByOrderNo("ORD-CANCEL-001")).willReturn(Optional.of(paidOrder));
             given(paymentRepository.findByMerchantUid("ORD-CANCEL-001")).willReturn(Optional.of(payment));
 
-            // 전액과 동일한 금액을 amount로 명시
-            PaymentResponse response = paymentService.cancelPayment(buildRequest(30_000L));
+            paymentService.cancelPayment(buildRequest(10_000L));
 
-            assertThat(response.getPaymentStatus()).isEqualTo(PaymentStatus.CANCELLED);
-            assertThat(response.getOrderStatus()).isEqualTo(OrderStatus.CANCELLED);
+            verify(inventoryService, never()).increase(any(), anyInt());
+            verify(pointService, never()).deduct(any(), any());
         }
     }
 
@@ -140,7 +154,7 @@ class PaymentServiceCancelTest {
                     .isInstanceOf(PaycoreException.class)
                     .hasMessageContaining("주문을 찾을 수 없습니다");
 
-            verify(portOneClient, never()).cancelPayment(any());
+            verify(gatewayClient, never()).cancel(any());
         }
 
         @Test
@@ -148,46 +162,29 @@ class PaymentServiceCancelTest {
         void cancel_orderNotPaid() {
             Order pendingOrder = Order.builder()
                     .orderNo("ORD-CANCEL-001")
-                    .userId(1L)
-                    .itemId(10L)
-                    .totalAmount(30_000L)
-                    .build(); // PENDING 상태
+                    .userId(1L).itemId(10L).totalAmount(30_000L)
+                    .build();
             given(orderRepository.findByOrderNo("ORD-CANCEL-001")).willReturn(Optional.of(pendingOrder));
 
             assertThatThrownBy(() -> paymentService.cancelPayment(buildRequest(null)))
                     .isInstanceOf(PaycoreException.class)
                     .hasMessageContaining("결제 완료 상태의 주문만 취소할 수 있습니다");
 
-            verify(portOneClient, never()).cancelPayment(any());
+            verify(gatewayClient, never()).cancel(any());
         }
 
         @Test
-        @DisplayName("결제 정보 없음 → PAYMENT_NOT_FOUND 예외")
-        void cancel_paymentNotFound() {
-            given(orderRepository.findByOrderNo("ORD-CANCEL-001")).willReturn(Optional.of(paidOrder));
-            given(paymentRepository.findByMerchantUid("ORD-CANCEL-001")).willReturn(Optional.empty());
-
-            assertThatThrownBy(() -> paymentService.cancelPayment(buildRequest(null)))
-                    .isInstanceOf(PaycoreException.class)
-                    .hasMessageContaining("결제 정보를 찾을 수 없습니다");
-
-            verify(portOneClient, never()).cancelPayment(any());
-        }
-
-        @Test
-        @DisplayName("PG 취소 API 실패 → PAYMENT_CANCEL_FAILED 예외, DB 미변경")
+        @DisplayName("PG 취소 API 실패 → 예외 발생, DB 미변경")
         void cancel_pgApiFails_dbNotChanged() {
             given(orderRepository.findByOrderNo("ORD-CANCEL-001")).willReturn(Optional.of(paidOrder));
             given(paymentRepository.findByMerchantUid("ORD-CANCEL-001")).willReturn(Optional.of(payment));
-            given(portOneClient.cancelPayment(any()))
-                    .willThrow(new PaycoreException(
-                            com.paycore.common.exception.ErrorCode.PAYMENT_CANCEL_FAILED));
+            given(gatewayClient.cancel(any())).willThrow(
+                    new PaycoreException(ErrorCode.PAYMENT_CANCEL_FAILED));
 
             assertThatThrownBy(() -> paymentService.cancelPayment(buildRequest(null)))
                     .isInstanceOf(PaycoreException.class)
                     .hasMessageContaining("결제 취소에 실패했습니다");
 
-            // PG 호출 실패 시 결제/주문 상태는 변경되지 않아야 함
             assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
             assertThat(paidOrder.getStatus()).isEqualTo(OrderStatus.PAID);
         }

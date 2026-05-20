@@ -4,9 +4,9 @@ import com.paycore.common.exception.PaycoreException;
 import com.paycore.order.domain.Order;
 import com.paycore.order.domain.OrderStatus;
 import com.paycore.order.repository.OrderRepository;
-import com.paycore.payment.client.PortOneClient;
 import com.paycore.payment.domain.Payment;
 import com.paycore.payment.domain.PaymentStatus;
+import com.paycore.payment.pg.*;
 import com.paycore.payment.repository.PaymentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,8 +33,10 @@ class PaymentSagaServiceTest {
 
     @Mock private OrderRepository orderRepository;
     @Mock private PaymentRepository paymentRepository;
-    @Mock private PortOneClient portOneClient;
+    @Mock private PgRouter pgRouter;
+    @Mock private PaymentGatewayClient gatewayClient;
     @Mock private PaymentLogService paymentLogService;
+    @Mock private com.paycore.saga.service.SagaDeadLetterService sagaDeadLetterService;
 
     private Order paidOrder;
     private Payment payment;
@@ -56,6 +58,8 @@ class PaymentSagaServiceTest {
                 .payMethod("card")
                 .paidAmount(30_000L)
                 .build();
+
+        given(pgRouter.route(any(PgProvider.class))).willReturn(gatewayClient);
     }
 
     @Test
@@ -66,17 +70,10 @@ class PaymentSagaServiceTest {
 
         paymentSagaService.cancelBySaga("ORD-SAGA-001");
 
-        // PG 취소 1번 호출
-        verify(portOneClient, times(1)).cancelPayment(any());
-
-        // 결제 전액 취소
+        verify(gatewayClient, times(1)).cancel(any(PgCancelCommand.class));
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
         assertThat(payment.getCancelledAmount()).isEqualTo(30_000L);
-
-        // 주문 CANCELLED
         assertThat(paidOrder.getStatus()).isEqualTo(OrderStatus.CANCELLED);
-
-        // 로그 저장
         verify(paymentLogService, times(1)).saveLog(any(), any(), any(), any(), anyBoolean(), any());
     }
 
@@ -89,7 +86,7 @@ class PaymentSagaServiceTest {
                 .isInstanceOf(PaycoreException.class)
                 .hasMessageContaining("주문을 찾을 수 없습니다");
 
-        verify(portOneClient, never()).cancelPayment(any());
+        verify(gatewayClient, never()).cancel(any());
     }
 
     @Test
@@ -102,7 +99,7 @@ class PaymentSagaServiceTest {
                 .isInstanceOf(PaycoreException.class)
                 .hasMessageContaining("결제 정보를 찾을 수 없습니다");
 
-        verify(portOneClient, never()).cancelPayment(any());
+        verify(gatewayClient, never()).cancel(any());
     }
 
     @Test
@@ -110,11 +107,9 @@ class PaymentSagaServiceTest {
     void cancelBySaga_pgFails_exceptionPropagated() {
         given(orderRepository.findByOrderNo("ORD-SAGA-001")).willReturn(Optional.of(paidOrder));
         given(paymentRepository.findByMerchantUid("ORD-SAGA-001")).willReturn(Optional.of(payment));
-        given(portOneClient.cancelPayment(any()))
-                .willThrow(new PaycoreException(
-                        com.paycore.common.exception.ErrorCode.PAYMENT_CANCEL_FAILED));
+        given(gatewayClient.cancel(any())).willThrow(
+                new PaycoreException(com.paycore.common.exception.ErrorCode.PAYMENT_CANCEL_FAILED));
 
-        // Saga cancelBySaga는 예외를 삼키지 않고 상위로 전파해야 함
         assertThatThrownBy(() -> paymentSagaService.cancelBySaga("ORD-SAGA-001"))
                 .isInstanceOf(PaycoreException.class);
     }

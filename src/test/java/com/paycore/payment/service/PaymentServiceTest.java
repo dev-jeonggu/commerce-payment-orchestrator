@@ -3,9 +3,8 @@ package com.paycore.payment.service;
 import com.paycore.common.exception.PaymentAmountMismatchException;
 import com.paycore.order.domain.Order;
 import com.paycore.order.repository.OrderRepository;
-import com.paycore.payment.client.PortOneClient;
-import com.paycore.payment.client.dto.PortOnePaymentResponse;
 import com.paycore.payment.controller.dto.PaymentVerifyRequest;
+import com.paycore.payment.pg.*;
 import com.paycore.payment.repository.PaymentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,7 +33,8 @@ class PaymentServiceTest {
 
     @Mock private OrderRepository orderRepository;
     @Mock private PaymentRepository paymentRepository;
-    @Mock private PortOneClient portOneClient;
+    @Mock private PgRouter pgRouter;
+    @Mock private PaymentGatewayClient gatewayClient;
     @Mock private PaymentLogService paymentLogService;
     @Mock private PaymentSagaService paymentSagaService;
     @Mock private InventoryService inventoryService;
@@ -50,57 +50,49 @@ class PaymentServiceTest {
                 .itemId(10L)
                 .totalAmount(30_000L)
                 .build();
+
+        given(pgRouter.route(any(PgProvider.class))).willReturn(gatewayClient);
     }
 
     @Test
     @DisplayName("[핵심] PG 금액 != 주문 금액 → PaymentAmountMismatchException + PG 취소 호출")
     void verifyPayment_amountMismatch_throwsAndCallsPgCancel() {
-        // given
         given(orderRepository.findByOrderNo("ORD-UNIT-001")).willReturn(Optional.of(mockOrder));
         given(paymentRepository.existsByImpUid("imp_unit_001")).willReturn(false);
-        // mock 먼저 생성 후 stubbing (given 안에서 given 호출 시 UnfinishedStubbingException 방지)
-        PortOnePaymentResponse fraudResponse = mockPgResponse("imp_unit_001", 1_000L, "paid");
-        given(portOneClient.getPaymentByImpUid("imp_unit_001")).willReturn(fraudResponse);
+        given(gatewayClient.getPaymentByPaymentKey("imp_unit_001"))
+                .willReturn(buildPgDetail("imp_unit_001", 1_000L, "paid"));
 
-        // when & then
         assertThatThrownBy(() -> paymentService.verifyAndSavePayment(
                 buildRequest("imp_unit_001", "ORD-UNIT-001")))
                 .isInstanceOf(PaymentAmountMismatchException.class)
                 .hasMessageContaining("30000")
                 .hasMessageContaining("1000");
 
-        // PG 취소 호출 확인
-        verify(portOneClient, times(1)).cancelPayment(any());
+        verify(gatewayClient, times(1)).cancel(any(PgCancelCommand.class));
     }
 
     @Test
     @DisplayName("이미 처리된 결제(impUid 중복) → PAYMENT_ALREADY_PROCESSED 예외")
     void verifyPayment_duplicateImpUid_throwsAlreadyProcessed() {
-        // given
         given(orderRepository.findByOrderNo("ORD-UNIT-001")).willReturn(Optional.of(mockOrder));
         given(paymentRepository.existsByImpUid("imp_unit_dup")).willReturn(true);
 
-        // when & then
         assertThatThrownBy(() -> paymentService.verifyAndSavePayment(
                 buildRequest("imp_unit_dup", "ORD-UNIT-001")))
                 .hasMessageContaining("이미 처리된 결제");
 
-        // PG 호출 없어야 함
-        verify(portOneClient, never()).getPaymentByImpUid(any());
+        verify(gatewayClient, never()).getPaymentByPaymentKey(any());
     }
 
     @Test
     @DisplayName("Webhook - 이미 PAID 상태 → 스킵 (멱등성)")
     void webhook_alreadyPaid_skip() {
-        // given: order already paid
         mockOrder.markAsPaid();
         given(orderRepository.findByOrderNo("ORD-UNIT-001")).willReturn(Optional.of(mockOrder));
 
-        // when
         paymentService.processWebhook("imp_wh_001", "ORD-UNIT-001");
 
-        // then: PG 조회 없음
-        verify(portOneClient, never()).getPaymentByImpUid(any());
+        verify(gatewayClient, never()).getPaymentByPaymentKey(any());
     }
 
     private PaymentVerifyRequest buildRequest(String impUid, String merchantUid) {
@@ -110,16 +102,15 @@ class PaymentServiceTest {
         return r;
     }
 
-    private PortOnePaymentResponse mockPgResponse(String impUid, Long amount, String status) {
-        PortOnePaymentResponse response = mock(PortOnePaymentResponse.class);
-        PortOnePaymentResponse.PaymentData data = mock(PortOnePaymentResponse.PaymentData.class);
-        given(response.isSuccess()).willReturn(true);
-        given(response.isPaid()).willReturn("paid".equals(status));
-        given(response.getAmount()).willReturn(amount);
-        given(response.getResponse()).willReturn(data);
-        given(data.getImpUid()).willReturn(impUid);
-        given(data.getPayMethod()).willReturn("card");
-        return response;
+    private PgPaymentDetail buildPgDetail(String paymentKey, long amount, String status) {
+        return PgPaymentDetail.builder()
+                .paymentKey(paymentKey)
+                .orderId("ORD-UNIT-001")
+                .status(status)
+                .payMethod("card")
+                .amount(amount)
+                .cancelledAmount(0L)
+                .build();
     }
 
     private void setField(Object obj, String name, Object value) {
