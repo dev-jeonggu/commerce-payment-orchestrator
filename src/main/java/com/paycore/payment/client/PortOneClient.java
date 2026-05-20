@@ -24,10 +24,8 @@ import java.time.ZoneId;
  * 3. 빌링키 결제, 가상계좌 발급 지원
  * 4. 401 응답 시 토큰 캐시 강제 만료 후 1회 재시도 (Token Refresh)
  *
- * [논란] WebClient.block() 사용
- *   현재 서비스가 Spring MVC(동기) 기반이라 block()이 자연스러움.
- *   WebFlux로 전환 시 block() 제거하고 reactive 체인으로 변경 필요.
- *   현 상황에서 RestClient(Spring 6.1+)도 대안이나 WebClient 그대로 유지.
+ * Spring MVC(동기) 기반이므로 WebClient.block() 사용.
+ * WebFlux 전환 시 block() 제거 후 reactive 체인으로 변경 필요.
  */
 @Slf4j
 @Component
@@ -226,8 +224,7 @@ public class PortOneClient implements PaymentGatewayClient {
     /**
      * 401 수신 시 토큰 캐시 무효화 후 1회 재시도
      *
-     * [논란] 무한 재시도 위험?
-     *   → 1회만 재시도. 재시도도 실패하면 PG_AUTHENTICATION_FAILED 예외 발생.
+     * 1회만 재시도. 재시도도 실패하면 PG_AUTHENTICATION_FAILED 예외 발생.
      */
     private PortOnePaymentResponse callWithTokenRefreshOnUnauthorized(
             ApiCall<PortOnePaymentResponse> call) {

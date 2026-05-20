@@ -27,9 +27,8 @@ import java.util.concurrent.TimeUnit;
  * [해결] Redis RBucket에 토큰 캐시 (TTL=25분, 토큰 유효기간=30분)
  *        Redisson 분산락으로 동시 토큰 갱신 요청 직렬화 (Thunder Herd 방지)
  *
- * [논란 포인트] leaseTime=25분짜리 락이 너무 긴 것 아닌가?
- *   → 락은 토큰 발급 시간(수백ms)만 유지됨. leaseTime은 서버 crash 시 자동 해제 보장.
- *   → 실제 waitTime=3초, leaseTime=5초로 충분히 짧게 설정.
+ * waitTime=3초, leaseTime=5초로 실제 락 유지 시간은 충분히 짧음.
+ * leaseTime은 서버 crash 시 락 자동 해제를 보장하기 위한 안전장치.
  */
 @Slf4j
 @Component
@@ -93,9 +92,8 @@ public class PortOneTokenManager {
     /**
      * 토큰 강제 만료 (401 응답 수신 시 캐시 무효화 후 재발급)
      *
-     * [논란 포인트] 토큰 만료 전에 PortOne이 401을 내려보낼 수 있는가?
-     *   → 서버 재배포, 비밀키 변경 등으로 강제 만료될 수 있음.
-     *   → 호출부에서 401 수신 시 evictToken() 호출 후 1회 재시도 패턴 권장.
+     * 서버 재배포, 비밀키 변경 등으로 토큰이 강제 만료될 수 있음.
+     * 호출부에서 401 수신 시 evictToken() 호출 후 1회 재시도 패턴 적용.
      */
     public void evictToken() {
         redissonClient.getBucket(TOKEN_BUCKET_KEY).delete();

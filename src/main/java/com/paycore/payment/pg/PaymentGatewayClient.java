@@ -7,11 +7,9 @@ package com.paycore.payment.pg;
  * 서비스 레이어는 PgRouter를 통해 이 인터페이스만 바라봄.
  * 새 PG사 추가 = 이 인터페이스 구현체 1개 추가 + PgProvider enum 추가.
  *
- * [논란] default 메서드로 "미지원" 예외를 던지는 것이 올바른가?
- *   → 모든 PG가 빌링키/가상계좌를 지원하지 않음(예: 카카오페이는 VA 미지원)
- *   → 구현체가 지원하는 기능만 override. 호출 전에 지원 여부 확인 필요.
- *   → 대안: 별도 interface(BillingCapable, VirtualAccountCapable)로 분리 가능하나
- *     현 규모에서는 over-engineering. instanceof 체크보다 default throw가 명시적.
+ * 모든 PG가 빌링키/가상계좌를 지원하지 않으므로(예: 카카오페이는 VA 미지원)
+ * default 메서드로 UnsupportedOperationException을 던짐.
+ * 구현체가 지원하는 기능만 override하며, 호출 전 지원 여부 확인 필요.
  */
 public interface PaymentGatewayClient {
 
