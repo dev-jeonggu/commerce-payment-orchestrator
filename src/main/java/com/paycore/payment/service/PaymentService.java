@@ -202,10 +202,9 @@ public class PaymentService {
     /**
      * 결제 취소
      *
-     * [수정] 기존 코드 누락 버그 수정: 전액 취소 시 재고 복구 + 포인트 회수
-     * [논란] 취소 후 재고 복구 실패 시?
-     *   → 고객 환불은 이미 완료. 재고 복구 실패는 운영 이슈로 DLQ에 기록 + 알람.
-     *   → 환불을 롤백할 수 없으므로 best-effort 복구가 맞는 설계.
+     * 전액 취소 시 재고 복구 + 포인트 회수 (best-effort).
+     * 고객 환불은 이미 완료된 상태이므로 재고 복구 실패 시 환불 롤백 불가.
+     * 복구 실패 건은 운영 이슈로 로그에 기록하여 수동 처리.
      */
     @Transactional
     public PaymentResponse cancelPayment(PaymentCancelRequest request) {

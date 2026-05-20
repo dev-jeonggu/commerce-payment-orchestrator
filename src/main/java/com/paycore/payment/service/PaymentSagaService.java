@@ -26,6 +26,9 @@ import org.springframework.transaction.annotation.Transactional;
  * [Step 4 변경] cancelBySaga 실패 시 Dead Letter 저장 + 알람
  * - SagaDeadLetterService.save()도 REQUIRES_NEW → DLQ 저장은 반드시 커밋
  *
+ * cancelBySaga 실패 시 DLQ 저장 + 알람 + 예외 re-throw.
+ * 예외를 받은 processAfterPayment가 컨트롤러로 전파 → "결제 취소됨" 응답 반환.
+ * 실제 취소 실패 건은 DLQ + 운영자 알람으로 후속 처리.
  */
 @Slf4j
 @Service
