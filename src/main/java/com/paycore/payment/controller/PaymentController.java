@@ -1,7 +1,9 @@
 package com.paycore.payment.controller;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.paycore.common.response.ApiResponse;
 import com.paycore.lock.DistributedLockService;
+import com.paycore.payment.client.PortOneWebhookVerifier;
 import com.paycore.payment.controller.dto.PaymentCancelRequest;
 import com.paycore.payment.controller.dto.PaymentResponse;
 import com.paycore.payment.controller.dto.PaymentVerifyRequest;
@@ -26,6 +28,8 @@ public class PaymentController {
 
     private final PaymentService paymentService;
     private final DistributedLockService distributedLockService;
+    private final PortOneWebhookVerifier webhookVerifier;
+    private final ObjectMapper objectMapper;
 
     @Operation(
         summary = "결제 검증 (사후 검증)",
@@ -91,11 +95,27 @@ public class PaymentController {
             content = @Content(schema = @Schema(example = "{\"success\":false,\"message\":\"주문을 찾을 수 없습니다.\"}")))
     })
     @PostMapping("/webhook")
-    public ApiResponse<Void> receiveWebhook(@RequestBody PaymentWebhookRequest request) {
+    public ApiResponse<Void> receiveWebhook(
+            @RequestHeader(value = "X-Imp-Signature", required = false) String signature,
+            @RequestBody String rawBody) throws com.fasterxml.jackson.core.JsonProcessingException {
+
+        // [보안 수정] PortOne HMAC-SHA256 서명 검증 (위조된 Webhook 차단)
+        // 서명 없는 요청은 외부 공격자가 임의로 결제 완료 이벤트를 주입할 수 있음.
+        webhookVerifier.verify(signature, rawBody);
+
+        PaymentWebhookRequest request = objectMapper.readValue(rawBody, PaymentWebhookRequest.class);
+
         log.info("[Webhook] 수신 - merchantUid: {}, impUid: {}, status: {}",
                 request.getMerchantUid(), request.getImpUid(), request.getStatus());
 
-        paymentService.processWebhook(request.getImpUid(), request.getMerchantUid());
+        boolean wasNewlyPaid = paymentService.processWebhook(
+                request.getImpUid(), request.getMerchantUid());
+
+        // 일반 카드/계좌이체 결제만 후처리 실행.
+        // 가상계좌는 processWebhook 내부 processDeposit에서 재고/포인트까지 이미 처리하므로
+        // wasNewlyPaid=false를 반환 → processAfterWebhook이 processAfterPayment를 호출하지 않음.
+        paymentService.processAfterWebhook(request.getMerchantUid(), wasNewlyPaid);
+
         return ApiResponse.success("Webhook 처리 완료", null);
     }
 

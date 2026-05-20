@@ -1,5 +1,6 @@
 package com.paycore.order.domain;
 
+import com.paycore.payment.pg.PgProvider;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -42,6 +43,15 @@ public class Order {
     @Column(nullable = false)
     private OrderStatus status;
 
+    /**
+     * 결제에 사용된 PG사
+     *
+     * [하위 호환] 기존 데이터는 NULL일 수 있음 → PgRouter에서 NULL 시 PORTONE으로 fallback
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "pg_provider")
+    private PgProvider pgProvider;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
@@ -50,17 +60,27 @@ public class Order {
     private LocalDateTime updatedAt;
 
     @Builder
-    public Order(String orderNo, Long userId, Long itemId, Long totalAmount) {
+    public Order(String orderNo, Long userId, Long itemId, Long totalAmount, PgProvider pgProvider) {
         this.orderNo = orderNo;
         this.userId = userId;
         this.itemId = itemId;
         this.totalAmount = totalAmount;
+        this.pgProvider = pgProvider != null ? pgProvider : PgProvider.PORTONE;
         this.status = OrderStatus.PENDING;
     }
 
     public void markAsPaid() {
         validateStatusTransition(OrderStatus.PAID);
         this.status = OrderStatus.PAID;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /** 가상계좌 발급 완료 → 입금 대기 상태 */
+    public void markAsPendingPayment() {
+        if (this.status != OrderStatus.PENDING) {
+            throw new IllegalStateException("PENDING 상태의 주문만 PENDING_PAYMENT로 전환할 수 있습니다. 현재: " + this.status);
+        }
+        this.status = OrderStatus.PENDING_PAYMENT;
         this.updatedAt = LocalDateTime.now();
     }
 
@@ -81,8 +101,17 @@ public class Order {
         return this.status == OrderStatus.PENDING;
     }
 
+    public boolean isPendingPayment() {
+        return this.status == OrderStatus.PENDING_PAYMENT;
+    }
+
     public boolean isPaid() {
         return this.status == OrderStatus.PAID;
+    }
+
+    /** 결제 가능한 상태인지 (PENDING 또는 PENDING_PAYMENT) */
+    public boolean isPayable() {
+        return this.status == OrderStatus.PENDING || this.status == OrderStatus.PENDING_PAYMENT;
     }
 
     private void validateStatusTransition(OrderStatus target) {

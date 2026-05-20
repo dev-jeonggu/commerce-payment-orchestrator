@@ -1,5 +1,6 @@
 package com.paycore.payment.domain;
 
+import com.paycore.payment.pg.PgProvider;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -44,6 +45,10 @@ public class Payment {
     @Column(name = "pay_method")
     private String payMethod;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "pg_provider")
+    private PgProvider pgProvider;
+
     @Column(name = "paid_amount", nullable = false)
     private Long paidAmount;
 
@@ -63,12 +68,13 @@ public class Payment {
 
     @Builder
     public Payment(Long orderId, String impUid, String merchantUid,
-                   String payMethod, Long paidAmount) {
+                   String payMethod, Long paidAmount, PgProvider pgProvider) {
         this.orderId = orderId;
         this.impUid = impUid;
         this.merchantUid = merchantUid;
         this.payMethod = payMethod;
         this.paidAmount = paidAmount;
+        this.pgProvider = pgProvider != null ? pgProvider : PgProvider.PORTONE;
         this.cancelledAmount = 0L;
         this.status = PaymentStatus.PAID;
     }

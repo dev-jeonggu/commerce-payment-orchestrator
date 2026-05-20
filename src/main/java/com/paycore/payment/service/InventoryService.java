@@ -16,4 +16,9 @@ public class InventoryService {
         log.info("[InventoryService] 재고 차감 - itemId: {}, quantity: {}", itemId, quantity);
         // 실무: 재고 DB/Redis에서 차감 + 부족 시 InsufficientStockException 발생
     }
+
+    public void increase(Long itemId, int quantity) {
+        log.info("[InventoryService] 재고 복구 - itemId: {}, quantity: {}", itemId, quantity);
+        // 실무: 결제 취소 후 재고 원복
+    }
 }

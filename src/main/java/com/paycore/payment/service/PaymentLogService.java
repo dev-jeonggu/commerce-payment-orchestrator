@@ -40,7 +40,10 @@ public class PaymentLogService {
                     .build();
 
             paymentLogRepository.save(log);
-        } catch (JsonProcessingException e) {
+        } catch (Exception e) {
+            // [버그 수정] JsonProcessingException만 잡으면 DataAccessException 등 unchecked 예외가
+            // 호출자(cancelBySaga 등)의 REQUIRES_NEW TX를 롤백시켜 결제/취소 DB 상태를 되돌림.
+            // 로그 저장 실패는 결제 흐름에 영향을 주면 안 되므로 모든 예외를 여기서 흡수.
             log.error("[PaymentLogService] 로그 저장 실패 - orderNo: {}", orderNo, e);
         }
     }

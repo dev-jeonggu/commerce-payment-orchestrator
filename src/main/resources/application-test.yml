@@ -21,6 +21,14 @@ spring:
       host: localhost
       port: 6379
 
+portone:
+  # 테스트용 PortOne 더미 키
+  imp-key: test_imp_key
+  imp-secret: test_imp_secret
+
+encryption:
+  aes-key: ${ENCRYPTION_AES_KEY}
+
 logging:
   level:
     com.paycore: INFO

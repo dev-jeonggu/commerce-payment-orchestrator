@@ -2,7 +2,7 @@ package com.paycore.payment.integration;
 
 import com.paycore.order.domain.Order;
 import com.paycore.order.domain.OrderStatus;
-import com.paycore.payment.client.dto.PortOnePaymentResponse;
+import com.paycore.payment.pg.PgCancelResult;
 import com.paycore.payment.controller.dto.PaymentCancelRequest;
 import com.paycore.payment.domain.Payment;
 import com.paycore.payment.domain.PaymentStatus;
@@ -15,7 +15,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.mock;
 
 /**
  * [테스트 3-1] 부분 취소 테스트
@@ -40,7 +39,7 @@ class PaymentPartialCancelTest extends AbstractIntegrationTest {
         Order order = createPendingOrder(10_000L);
         createPaidPayment(order, "imp_partial_001");
 
-        given(portOneClient.cancelPayment(any())).willReturn(mock(PortOnePaymentResponse.class));
+        given(portOneClient.cancel(any())).willReturn(PgCancelResult.of("imp_any", 10_000L, 0L));
 
         // When: 3,000원 부분 취소
         PaymentCancelRequest cancelRequest = buildCancelRequest(
@@ -80,7 +79,7 @@ class PaymentPartialCancelTest extends AbstractIntegrationTest {
         Order order = createPendingOrder(10_000L);
         createPaidPayment(order, "imp_full_cancel_001");
 
-        given(portOneClient.cancelPayment(any())).willReturn(mock(PortOnePaymentResponse.class));
+        given(portOneClient.cancel(any())).willReturn(PgCancelResult.of("imp_any", 10_000L, 0L));
 
         // When: 전액 취소 (amount = null)
         PaymentCancelRequest cancelRequest = buildCancelRequest(
@@ -109,7 +108,7 @@ class PaymentPartialCancelTest extends AbstractIntegrationTest {
         // Given
         Order order = createPendingOrder(10_000L);
         createPaidPayment(order, "imp_multi_cancel_001");
-        given(portOneClient.cancelPayment(any())).willReturn(mock(PortOnePaymentResponse.class));
+        given(portOneClient.cancel(any())).willReturn(PgCancelResult.of("imp_any", 10_000L, 0L));
 
         // When: 첫 번째 부분 취소 3,000원
         paymentService.cancelPayment(buildCancelRequest(order.getOrderNo(), "1차 취소", 3_000L));
