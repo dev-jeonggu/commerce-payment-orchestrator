@@ -7,13 +7,23 @@ spring:
 
 portone:
   api-url: https://api.iamport.kr
-  imp-key: ${PORTONE_IMP_KEY:test_imp_key}
-  imp-secret: ${PORTONE_IMP_SECRET:test_imp_secret}
+  # default 없음 → 환경변수 미설정 시 기동 실패 (운영에서 테스트 키 사용 방지)
+  # dev/test 프로파일에서 각자 오버라이드
+  imp-key: ${PORTONE_IMP_KEY}
+  imp-secret: ${PORTONE_IMP_SECRET}
 
 scheduler:
   pending-recovery:
     fixed-delay: 300000      # 5분
     pending-threshold-minutes: 30
+  virtual-account-expiry:
+    fixed-delay: 600000      # 10분
+
+encryption:
+  # 32-byte AES-256 key (Base64 encoded).
+  # default 없음 → ENCRYPTION_AES_KEY 환경변수 미설정 시 기동 실패 (의도된 동작).
+  # 실제 키는 각 프로파일(dev/test)에서만 하드코딩 허용, prod는 반드시 환경변수로 주입.
+  aes-key: ${ENCRYPTION_AES_KEY}
 
 springdoc:
   swagger-ui:
