@@ -4,29 +4,33 @@ import com.paycore.order.domain.Order;
 import com.paycore.order.domain.OrderStatus;
 import com.paycore.order.repository.OrderRepository;
 import com.paycore.payment.service.PaymentService;
+import com.paycore.virtualaccount.service.VirtualAccountService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * PENDING 주문 자동 복구 스케줄러
  *
- * 발생 케이스:
- * 1. 사용자가 결제 후 브라우저 종료 → verify API 미호출
- * 2. Webhook 유실
- * 3. 서버 장애로 verify 처리 실패
+ * [Step 2 변경] 분산 환경 중복 실행 방지
+ * Redisson tryLock(waitTime=0): 락 획득 실패 시 즉시 스킵 (다른 인스턴스가 실행 중)
  *
- * [트랜잭션 흐름]
- * 1. recoverOrderWithTx (PaymentRecoveryService, @Transactional)
- *    → Payment 저장 + Order PAID 원자적 커밋
- * 2. processAfterPayment (PaymentService, @Transactional)
- *    → 커밋된 Payment 조회 후 재고/포인트 후처리
- *    → 실패 시 Saga(REQUIRES_NEW)가 커밋된 Payment를 정상 조회하여 보상 취소
+ * [논란] 왜 ShedLock 같은 라이브러리를 쓰지 않나?
+ *   → 이미 Redisson이 있으므로 추가 의존성 없이 동일 효과.
+ *   → ShedLock은 DB 테이블 or Redis 기반이며, Redisson tryLock과 동일 원리.
+ *   → 팀 표준에 ShedLock이 있다면 ShedLock 채택이 명시적 의도 전달에 유리.
+ *
+ * [논란] leaseTime=4분으로 설정한 이유?
+ *   → 스케줄러 주기=5분. leaseTime < 주기여야 다음 실행에서 락 획득 가능.
+ *   → 스케줄러 실행 시간이 4분을 초과하면 다음 인스턴스가 중복 실행 가능 → 모니터링 필요.
  */
 @Slf4j
 @Component
@@ -36,18 +40,58 @@ public class PaymentRecoveryScheduler {
     private final OrderRepository orderRepository;
     private final PaymentRecoveryService paymentRecoveryService;
     private final PaymentService paymentService;
+    private final VirtualAccountService virtualAccountService;
+    private final RedissonClient redissonClient;
+
+    private static final String SCHEDULER_LOCK_KEY = "lock:scheduler:pending-recovery";
 
     @Value("${scheduler.pending-recovery.pending-threshold-minutes:30}")
     private int pendingThresholdMinutes;
 
     @Scheduled(fixedDelayString = "${scheduler.pending-recovery.fixed-delay:300000}")
     public void recoverPendingOrders() {
+        RLock schedulerLock = redissonClient.getLock(SCHEDULER_LOCK_KEY);
+
+        // waitTime=0: 락 획득 실패 시 즉시 리턴 (다른 인스턴스가 실행 중)
+        boolean acquired;
+        try {
+            acquired = schedulerLock.tryLock(0L, 4L, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("[Scheduler] 락 획득 인터럽트 - 스킵");
+            return;
+        }
+
+        if (!acquired) {
+            log.debug("[Scheduler] 다른 인스턴스 실행 중 - 스킵");
+            return;
+        }
+
+        try {
+            doRecover();
+        } finally {
+            if (schedulerLock.isHeldByCurrentThread()) {
+                schedulerLock.unlock();
+            }
+        }
+    }
+
+    private void doRecover() {
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(pendingThresholdMinutes);
+
+        // 1. 일반 결제 PENDING 주문 복구 (카드/계좌이체 미완료 건)
+        recoverPendingOrders(threshold);
+
+        // 2. 가상계좌 입금 대기 PENDING_PAYMENT 주문 Webhook 누락 복구
+        recoverPendingPaymentOrders(threshold);
+    }
+
+    private void recoverPendingOrders(LocalDateTime threshold) {
         List<Order> pendingOrders = orderRepository.findByStatusAndCreatedAtBefore(
                 OrderStatus.PENDING, threshold);
 
         if (pendingOrders.isEmpty()) {
-            log.debug("[Scheduler] 복구 대상 없음");
+            log.debug("[Scheduler] PENDING 복구 대상 없음");
             return;
         }
 
@@ -60,7 +104,7 @@ public class PaymentRecoveryScheduler {
                     try {
                         paymentService.processAfterPayment(order.getOrderNo());
                     } catch (Exception e) {
-                        log.error("[Scheduler] 복구 후처리 실패 (Saga 보상 취소 완료) - orderNo: {}",
+                        log.error("[Scheduler] 복구 후처리 실패 (Saga 보상 완료) - orderNo: {}",
                                 order.getOrderNo());
                     }
                 }
@@ -71,5 +115,39 @@ public class PaymentRecoveryScheduler {
         }
 
         log.info("[Scheduler] PENDING 주문 복구 완료");
+    }
+
+    /**
+     * 가상계좌 Webhook 누락 복구
+     *
+     * PENDING_PAYMENT 상태: 가상계좌 발급 완료 → 입금 대기 중.
+     * PG Webhook 누락 시 PG API로 입금 여부를 직접 조회.
+     *
+     * [논란] 입금 기한이 지난 건은 어떻게?
+     *   → dueDate 만료 건은 VirtualAccountExpiryScheduler가 EXPIRED 처리.
+     *   → 여기서는 dueDate 체크 없이 일단 PG 조회 후 상태 반영.
+     *   → PG가 "paid"를 반환하면 입금 처리, "cancelled/expired"면 취소 처리.
+     */
+    private void recoverPendingPaymentOrders(LocalDateTime threshold) {
+        List<Order> pendingPaymentOrders = orderRepository.findPendingPaymentOrdersBefore(
+                OrderStatus.PENDING_PAYMENT, threshold);
+
+        if (pendingPaymentOrders.isEmpty()) {
+            log.debug("[Scheduler] PENDING_PAYMENT(가상계좌) 복구 대상 없음");
+            return;
+        }
+
+        log.info("[Scheduler] 가상계좌 입금 대기 복구 시작 - 대상: {}건", pendingPaymentOrders.size());
+
+        for (Order order : pendingPaymentOrders) {
+            try {
+                paymentRecoveryService.recoverVirtualAccountWithTx(order, virtualAccountService);
+            } catch (Exception e) {
+                log.error("[Scheduler] 가상계좌 복구 실패 - orderNo: {} (수동 처리 필요)",
+                        order.getOrderNo(), e);
+            }
+        }
+
+        log.info("[Scheduler] 가상계좌 입금 대기 복구 완료");
     }
 }
