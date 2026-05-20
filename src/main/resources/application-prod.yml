@@ -25,6 +25,10 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+encryption:
+  # 반드시 환경변수로 주입. 누락 시 애플리케이션 기동 실패 (AES256KeyInitializer에서 검증).
+  aes-key: ${ENCRYPTION_AES_KEY}
+
 logging:
   level:
     com.paycore: INFO
