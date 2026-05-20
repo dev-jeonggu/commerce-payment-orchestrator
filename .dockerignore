@@ -6,4 +6,7 @@ build/
 .idea
 .vscode
 .env
+.env.local
 docker-compose*.yml
+*.iml
+out/
