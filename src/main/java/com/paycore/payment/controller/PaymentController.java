@@ -16,6 +16,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
+import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
+
 @Tag(name = "Payment API", description = "결제 관리 API")
 @Slf4j
 @RestController
@@ -75,7 +78,12 @@ public class PaymentController {
             @RequestParam String txId,
             @RequestParam String merchantOrderId) {
 
-        if (!internalWebhookToken.equals(token)) {
+        // MessageDigest.isEqual: 상수 시간 비교로 타이밍 공격 방어
+        boolean tokenValid = token != null && MessageDigest.isEqual(
+                internalWebhookToken.getBytes(StandardCharsets.UTF_8),
+                token.getBytes(StandardCharsets.UTF_8)
+        );
+        if (!tokenValid) {
             log.warn("[PaymentController] 내부 Webhook 인증 실패 - txId: {}", txId);
             throw new PaycoreException(ErrorCode.WEBHOOK_SIGNATURE_INVALID, "내부 Webhook 인증에 실패했습니다.");
         }
