@@ -19,7 +19,7 @@ import java.time.LocalDateTime;
 @Table(
     name = "payment_logs",
     indexes = {
-        @Index(name = "idx_payment_log_order_no", columnList = "order_no"),
+        @Index(name = "idx_payment_log_merchant_order", columnList = "merchant_order_id"),
         @Index(name = "idx_payment_log_created", columnList = "created_at")
     }
 )
@@ -32,8 +32,8 @@ public class PaymentLog {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "order_no", nullable = false)
-    private String orderNo;
+    @Column(name = "merchant_order_id", nullable = false)
+    private String merchantOrderId;
 
     @Column(name = "log_type", nullable = false)
     @Enumerated(EnumType.STRING)
@@ -62,9 +62,9 @@ public class PaymentLog {
     private LocalDateTime createdAt;
 
     @Builder
-    public PaymentLog(String orderNo, LogType logType, String requestPayload,
+    public PaymentLog(String merchantOrderId, LogType logType, String requestPayload,
                       String responsePayload, Boolean success, String errorMessage) {
-        this.orderNo = orderNo;
+        this.merchantOrderId = merchantOrderId;
         this.logType = logType;
         this.requestPayload = requestPayload;
         this.responsePayload = responsePayload;

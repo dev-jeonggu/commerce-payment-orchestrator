@@ -1,5 +1,6 @@
 package com.paycore.payment.domain;
 
+import com.paycore.payment.method.PaymentMethod;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -15,10 +16,10 @@ class PaymentDomainTest {
     @BeforeEach
     void setUp() {
         payment = Payment.builder()
-                .orderId(1L)
-                .impUid("imp_domain_001")
-                .merchantUid("ORD-DOMAIN-001")
-                .payMethod("card")
+                .merchantId("TEST-MERCHANT")
+                .txId("CARD-DOMAIN-001")
+                .merchantOrderId("ORD-DOMAIN-001")
+                .paymentMethod(PaymentMethod.CARD)
                 .paidAmount(30_000L)
                 .build();
     }

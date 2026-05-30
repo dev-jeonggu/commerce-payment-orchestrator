@@ -25,11 +25,6 @@ spring:
 cors:
   allowed-origins: http://localhost:3000
 
-portone:
-  # dev용 PortOne 테스트 키 (실제 결제 발생하지 않음)
-  imp-key: test_imp_key
-  imp-secret: test_imp_secret
-
 encryption:
   aes-key: ${ENCRYPTION_AES_KEY}
 

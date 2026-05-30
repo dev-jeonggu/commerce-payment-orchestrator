@@ -1,6 +1,6 @@
 package com.paycore.saga.domain;
 
-import com.paycore.payment.pg.PgProvider;
+import com.paycore.payment.method.PaymentMethod;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -14,12 +14,9 @@ import java.time.LocalDateTime;
 /**
  * Saga 보상 트랜잭션 실패 Dead Letter 엔티티
  *
- * [설계 의도] 보상 취소(cancelBySaga)가 실패하면:
- *   1. PG에서 돈이 나갔는데 우리 DB는 PAID 상태 → 데이터 불일치
- *   2. 이 불일치를 즉시 해결 불가 → Dead Letter에 기록
- *   3. 재시도 스케줄러가 주기적으로 처리 시도
- *   4. 최대 재시도 초과 시 EXHAUSTED → 운영자 수동 처리 알람
- *
+ * 보상 취소(cancelBySaga)가 실패하면 이 테이블에 기록하고
+ * 재시도 스케줄러가 주기적으로 처리 시도.
+ * 최대 재시도 초과 시 EXHAUSTED → 운영자 수동 처리 알람.
  */
 @Entity
 @Table(name = "saga_dead_letters",
@@ -36,29 +33,26 @@ public class SagaDeadLetter {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "order_no", nullable = false)
-    private String orderNo;
+    @Column(name = "merchant_order_id", nullable = false)
+    private String merchantOrderId;
 
-    @Column(name = "imp_uid")
-    private String impUid;
+    @Column(name = "tx_id")
+    private String txId;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "pg_provider")
-    private PgProvider pgProvider;
+    @Column(name = "payment_method")
+    private PaymentMethod paymentMethod;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private SagaDeadLetterStatus status;
 
-    /** 실패 원인 */
     @Column(name = "error_message", length = 2000)
     private String errorMessage;
 
-    /** 재시도 횟수 */
     @Column(name = "attempt_count", nullable = false)
     private int attemptCount;
 
-    /** 마지막 재시도 시각 */
     @Column(name = "last_attempted_at")
     private LocalDateTime lastAttemptedAt;
 
@@ -69,10 +63,10 @@ public class SagaDeadLetter {
     private static final int MAX_ATTEMPTS = 5;
 
     @Builder
-    public SagaDeadLetter(String orderNo, String impUid, PgProvider pgProvider, String errorMessage) {
-        this.orderNo = orderNo;
-        this.impUid = impUid;
-        this.pgProvider = pgProvider;
+    public SagaDeadLetter(String merchantOrderId, String txId, PaymentMethod paymentMethod, String errorMessage) {
+        this.merchantOrderId = merchantOrderId;
+        this.txId = txId;
+        this.paymentMethod = paymentMethod;
         this.errorMessage = errorMessage;
         this.status = SagaDeadLetterStatus.PENDING;
         this.attemptCount = 0;

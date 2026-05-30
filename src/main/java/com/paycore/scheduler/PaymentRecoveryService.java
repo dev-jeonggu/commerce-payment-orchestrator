@@ -1,11 +1,9 @@
 package com.paycore.scheduler;
 
-import com.paycore.order.domain.Order;
-import com.paycore.order.repository.OrderRepository;
 import com.paycore.payment.domain.Payment;
 import com.paycore.payment.domain.PaymentLog;
-import com.paycore.payment.pg.PgPaymentDetail;
-import com.paycore.payment.pg.PgRouter;
+import com.paycore.payment.method.PaymentMethodRouter;
+import com.paycore.payment.method.cmd.PaymentDetail;
 import com.paycore.payment.repository.PaymentRepository;
 import com.paycore.payment.service.PaymentLogService;
 import com.paycore.virtualaccount.repository.VirtualAccountRepository;
@@ -21,122 +19,83 @@ import org.springframework.transaction.annotation.Transactional;
  * [설계 이유] PaymentRecoveryScheduler와 분리한 핵심 이유:
  * Spring AOP 트랜잭션은 프록시를 통해서만 동작.
  * self-invocation 시 @Transactional 무시 → 별도 Bean으로 분리.
- *
- * [변경] PortOneClient 직접 의존 제거 → PgRouter 경유
- * order.pgProvider로 해당 PG 클라이언트 선택
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PaymentRecoveryService {
 
-    private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
-    private final PgRouter pgRouter;
+    private final PaymentMethodRouter paymentMethodRouter;
     private final PaymentLogService paymentLogService;
     private final VirtualAccountRepository virtualAccountRepository;
 
+    /**
+     * 미완료 결제 복구: Payment 기반으로 txId로 실제 상태 재조회
+     */
     @Transactional
-    public boolean recoverOrderWithTx(Order order) {
-        log.info("[RecoveryService] 복구 처리 - orderNo: {}, createdAt: {}",
-                order.getOrderNo(), order.getCreatedAt());
+    public boolean recoverPaymentWithTx(Payment payment) {
+        log.info("[RecoveryService] 결제 복구 처리 - merchantOrderId: {}, txId: {}",
+                payment.getMerchantOrderId(), payment.getTxId());
 
-        Order managedOrder = orderRepository.findByOrderNo(order.getOrderNo())
-                .orElseThrow(() -> new IllegalStateException("복구 대상 주문 미조회: " + order.getOrderNo()));
-
-        PgPaymentDetail pgPayment;
+        PaymentDetail detail;
         try {
-            pgPayment = pgRouter.route(managedOrder.getPgProvider())
-                    .getPaymentByOrderId(managedOrder.getOrderNo());
+            detail = paymentMethodRouter.route(payment.getPaymentMethod())
+                    .getPaymentByTxId(payment.getTxId());
         } catch (Exception e) {
-            log.warn("[RecoveryService] PG 조회 실패 - orderNo: {} → CANCELLED 처리", managedOrder.getOrderNo());
-            managedOrder.markAsCancelled();
-            paymentLogService.saveLog(managedOrder.getOrderNo(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, null, false, "PG 조회 실패: " + e.getMessage());
+            log.warn("[RecoveryService] 결제 조회 실패 - merchantOrderId: {}",
+                    payment.getMerchantOrderId(), e);
+            paymentLogService.saveLog(payment.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
+                    null, null, false, "결제 조회 실패: " + e.getMessage());
             return false;
         }
 
-        if (pgPayment.isPaid()) {
-            if (paymentRepository.existsByImpUid(pgPayment.getPaymentKey())) {
-                log.info("[RecoveryService] 이미 처리된 결제 스킵 - orderNo: {}", managedOrder.getOrderNo());
-                return false;
-            }
-            Payment payment = Payment.builder()
-                    .orderId(managedOrder.getId())
-                    .impUid(pgPayment.getPaymentKey())
-                    .merchantUid(managedOrder.getOrderNo())
-                    .payMethod(pgPayment.getPayMethod())
-                    .paidAmount(pgPayment.getAmount())
-                    .pgProvider(managedOrder.getPgProvider())
-                    .build();
-            paymentRepository.save(payment);
-            managedOrder.markAsPaid();
-            paymentLogService.saveLog(managedOrder.getOrderNo(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, pgPayment, true, null);
-            log.info("[RecoveryService] PAID 복구 완료 - orderNo: {}", managedOrder.getOrderNo());
+        if (detail.isPaid()) {
+            paymentLogService.saveLog(payment.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
+                    null, detail, true, null);
+            log.info("[RecoveryService] 결제 상태 확인 완료 (PAID) - merchantOrderId: {}",
+                    payment.getMerchantOrderId());
             return true;
         } else {
-            managedOrder.markAsCancelled();
-            paymentLogService.saveLog(managedOrder.getOrderNo(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, pgPayment, false, null);
-            log.info("[RecoveryService] CANCELLED 처리 - orderNo: {}", managedOrder.getOrderNo());
+            paymentLogService.saveLog(payment.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
+                    null, detail, false, "결제 미완료 상태: " + detail.getStatus());
             return false;
         }
     }
 
     /**
-     * 가상계좌 Webhook 누락 복구
-     *
-     * PENDING_PAYMENT 주문에 대해 PG API로 입금 여부를 직접 조회.
-     * paid 상태면 VirtualAccountService.processDeposit 위임.
-     *
-     * [주의] VirtualAccountService를 파라미터로 받는 이유:
-     *   순환 참조 방지 (VirtualAccountService → PaymentService, PaymentRecoveryService → VirtualAccountService)
-     *   스케줄러에서 직접 주입받아 전달하는 방식으로 해결.
+     * 가상계좌 Webhook 누락 복구: txId로 입금 여부 직접 조회
      */
     @Transactional
-    public void recoverVirtualAccountWithTx(Order order, VirtualAccountService virtualAccountService) {
-        Order managedOrder = orderRepository.findByOrderNo(order.getOrderNo())
-                .orElseThrow(() -> new IllegalStateException("복구 대상 주문 미조회: " + order.getOrderNo()));
+    public void recoverVirtualAccountWithTx(
+            com.paycore.virtualaccount.domain.VirtualAccount va,
+            VirtualAccountService virtualAccountService) {
 
-        // 이미 처리된 경우 스킵
-        if (managedOrder.isPaid()) {
-            log.debug("[RecoveryService] 가상계좌 이미 결제 완료 스킵 - orderNo: {}", managedOrder.getOrderNo());
+        if (va.isDeposited()) {
+            log.debug("[RecoveryService] 가상계좌 이미 입금 완료 스킵 - merchantOrderId: {}",
+                    va.getMerchantOrderId());
             return;
         }
 
-        // 가상계좌 정보 조회
-        var vaOpt = virtualAccountRepository.findByOrderNo(managedOrder.getOrderNo());
-        if (vaOpt.isEmpty()) {
-            log.warn("[RecoveryService] 가상계좌 정보 없음 - orderNo: {}", managedOrder.getOrderNo());
-            return;
-        }
-
-        var va = vaOpt.get();
-        if (!va.isIssued()) {
-            log.debug("[RecoveryService] 가상계좌 ISSUED 상태 아님 스킵 - orderNo: {}, status: {}",
-                    managedOrder.getOrderNo(), va.getStatus());
-            return;
-        }
-
-        // PG API로 실제 입금 여부 조회
-        PgPaymentDetail pgPayment;
+        PaymentDetail detail;
         try {
-            pgPayment = pgRouter.route(managedOrder.getPgProvider())
-                    .getPaymentByPaymentKey(va.getImpUid());
+            detail = paymentMethodRouter.route(com.paycore.payment.method.PaymentMethod.VIRTUAL_ACCOUNT)
+                    .getPaymentByTxId(va.getTxId());
         } catch (Exception e) {
-            log.warn("[RecoveryService] 가상계좌 PG 조회 실패 - orderNo: {}", managedOrder.getOrderNo(), e);
+            log.warn("[RecoveryService] 가상계좌 조회 실패 - merchantOrderId: {}",
+                    va.getMerchantOrderId(), e);
             return;
         }
 
-        if (pgPayment.isPaid()) {
-            log.info("[RecoveryService] 가상계좌 입금 확인(복구) - orderNo: {}", managedOrder.getOrderNo());
-            virtualAccountService.processDeposit(va.getImpUid());
-            paymentLogService.saveLog(managedOrder.getOrderNo(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, pgPayment, true, "가상계좌 입금 복구");
+        if (detail.isPaid()) {
+            log.info("[RecoveryService] 가상계좌 입금 확인(복구) - merchantOrderId: {}",
+                    va.getMerchantOrderId());
+            virtualAccountService.processDeposit(va.getTxId());
+            paymentLogService.saveLog(va.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
+                    null, detail, true, "가상계좌 입금 복구");
         } else {
-            log.debug("[RecoveryService] 가상계좌 미입금 - orderNo: {}, PG상태: {}",
-                    managedOrder.getOrderNo(), pgPayment.getStatus());
+            log.debug("[RecoveryService] 가상계좌 미입금 - merchantOrderId: {}, 상태: {}",
+                    va.getMerchantOrderId(), detail.getStatus());
         }
     }
 }

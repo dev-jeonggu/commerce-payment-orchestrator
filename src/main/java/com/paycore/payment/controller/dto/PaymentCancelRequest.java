@@ -1,6 +1,5 @@
 package com.paycore.payment.controller.dto;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
@@ -12,13 +11,12 @@ import lombok.NoArgsConstructor;
 @Schema(description = "결제 취소 요청")
 public class PaymentCancelRequest {
 
-    @NotBlank(message = "merchant_uid는 필수입니다.")
-    @JsonProperty("merchant_uid")
+    @NotBlank(message = "merchantOrderId는 필수입니다.")
     @Schema(description = "가맹점 주문번호", example = "ORD-20260303-001")
-    private String merchantUid;
+    private String merchantOrderId;
 
     @NotBlank(message = "취소 사유는 필수입니다.")
-    @Schema(description = "취소 사유", example = "재고 부족")
+    @Schema(description = "취소 사유", example = "고객 요청")
     private String reason;
 
     @Positive(message = "취소 금액은 양수여야 합니다.")

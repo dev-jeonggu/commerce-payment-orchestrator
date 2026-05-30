@@ -7,9 +7,11 @@ import java.util.Optional;
 
 public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
-    Optional<Payment> findByMerchantUid(String merchantUid);
+    Optional<Payment> findByMerchantOrderId(String merchantOrderId);
 
-    Optional<Payment> findByImpUid(String impUid);
+    Optional<Payment> findByTxId(String txId);
 
-    boolean existsByImpUid(String impUid);
+    boolean existsByTxId(String txId);
+
+    boolean existsByMerchantOrderId(String merchantOrderId);
 }

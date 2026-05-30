@@ -24,14 +24,14 @@ public class PaymentLogService {
     private final ObjectMapper objectMapper;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void saveLog(String orderNo, PaymentLog.LogType logType,
+    public void saveLog(String merchantOrderId, PaymentLog.LogType logType,
                         Object request, Object response, boolean success, String errorMessage) {
         try {
             String requestJson = request != null ? objectMapper.writeValueAsString(request) : null;
             String responseJson = response != null ? objectMapper.writeValueAsString(response) : null;
 
             PaymentLog log = PaymentLog.builder()
-                    .orderNo(orderNo)
+                    .merchantOrderId(merchantOrderId)
                     .logType(logType)
                     .requestPayload(requestJson)
                     .responsePayload(responseJson)
@@ -44,7 +44,7 @@ public class PaymentLogService {
             // [버그 수정] JsonProcessingException만 잡으면 DataAccessException 등 unchecked 예외가
             // 호출자(cancelBySaga 등)의 REQUIRES_NEW TX를 롤백시켜 결제/취소 DB 상태를 되돌림.
             // 로그 저장 실패는 결제 흐름에 영향을 주면 안 되므로 모든 예외를 여기서 흡수.
-            log.error("[PaymentLogService] 로그 저장 실패 - orderNo: {}", orderNo, e);
+            log.error("[PaymentLogService] 로그 저장 실패 - merchantOrderId: {}", merchantOrderId, e);
         }
     }
 }
