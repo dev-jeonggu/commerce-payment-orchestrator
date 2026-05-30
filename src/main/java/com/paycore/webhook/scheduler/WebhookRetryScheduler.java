@@ -46,20 +46,25 @@ public class WebhookRetryScheduler {
         }
 
         try {
-            int page = 0;
             final int batchSize = 100;
             List<WebhookDeadLetter> pending;
+            int totalProcessed = 0;
 
+            // retry() 실행 후 status가 PENDING→PROCESSING/RESOLVED로 변경되므로
+            // 항상 page=0으로 조회해야 처리된 건이 빠지고 다음 건이 올라온다.
+            // page를 증가시키면 status 변경으로 인한 offset 이동으로 항목을 스킵하게 된다.
             do {
-                pending = webhookRetryService.findPending(PageRequest.of(page, batchSize));
+                pending = webhookRetryService.findPending(PageRequest.of(0, batchSize));
                 if (pending.isEmpty()) break;
 
-                log.info("[WebhookRetryScheduler] 재시도 배치 시작 - 페이지: {}, {}건", page, pending.size());
+                log.info("[WebhookRetryScheduler] 재시도 배치 - {}건", pending.size());
                 pending.forEach(webhookRetryService::retry);
-                page++;
+                totalProcessed += pending.size();
             } while (pending.size() == batchSize);
 
-            log.info("[WebhookRetryScheduler] 재시도 완료");
+            if (totalProcessed > 0) {
+                log.info("[WebhookRetryScheduler] 재시도 완료 - 총 {}건", totalProcessed);
+            }
         } finally {
             if (lock.isHeldByCurrentThread()) lock.unlock();
         }
