@@ -13,8 +13,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import java.util.HexFormat;
 import java.util.List;
@@ -59,13 +60,18 @@ public class WebhookRetryService {
     /**
      * DLQ 재시도 — 스케줄러에서 호출.
      *
-     * 실패 시 attemptCount 증가. MAX_ATTEMPTS 초과 시 EXHAUSTED + 알람.
+     * [트랜잭션 분리 설계]
+     * HTTP 호출을 @Transactional 안에서 .block()하면 DB 커넥션을 점유한 채로 대기한다.
+     * 이를 방지하기 위해:
+     *   1. markProcessing() 커밋 (TX1)
+     *   2. HTTP 호출 (트랜잭션 없음)
+     *   3. 결과에 따라 markResolved/markFailed 커밋 (TX2)
      */
-    @Transactional
     public void retry(WebhookDeadLetter deadLetter) {
-        deadLetter.markProcessing();
-        deadLetterRepository.save(deadLetter);
+        markProcessing(deadLetter);
 
+        boolean success = false;
+        String errorMessage = null;
         try {
             String signature = hmacSha256(deadLetter.getWebhookSecret(), deadLetter.getPayload());
 
@@ -77,17 +83,34 @@ public class WebhookRetryService {
                     .bodyValue(deadLetter.getPayload())
                     .retrieve()
                     .toBodilessEntity()
+                    .timeout(Duration.ofSeconds(10))
                     .block();
 
-            deadLetter.markResolved();
+            success = true;
             log.info("[WebhookDLQ] 재시도 성공 - merchantId: {}, txId: {}",
                     deadLetter.getMerchantId(), deadLetter.getTxId());
 
         } catch (Exception e) {
-            deadLetter.markFailed(e.getMessage());
-            log.warn("[WebhookDLQ] 재시도 실패 ({}회) - merchantId: {}, txId: {}",
-                    deadLetter.getAttemptCount(), deadLetter.getMerchantId(), deadLetter.getTxId());
+            errorMessage = e.getMessage();
+            log.warn("[WebhookDLQ] 재시도 실패 - merchantId: {}, txId: {}",
+                    deadLetter.getMerchantId(), deadLetter.getTxId(), e);
+        }
 
+        updateResult(deadLetter, success, errorMessage);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markProcessing(WebhookDeadLetter deadLetter) {
+        deadLetter.markProcessing();
+        deadLetterRepository.save(deadLetter);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void updateResult(WebhookDeadLetter deadLetter, boolean success, String errorMessage) {
+        if (success) {
+            deadLetter.markResolved();
+        } else {
+            deadLetter.markFailed(errorMessage);
             if (deadLetter.isExhausted()) {
                 log.error("[WebhookDLQ] 최대 재시도 초과 - merchantId: {} (수동 처리 필요)",
                         deadLetter.getMerchantId());
@@ -96,11 +119,13 @@ public class WebhookRetryService {
                         deadLetter.getMerchantOrderId(),
                         "merchantId=" + deadLetter.getMerchantId()
                                 + ", url=" + deadLetter.getWebhookUrl()
-                                + ", error=" + e.getMessage()
+                                + ", error=" + errorMessage
                 );
+            } else {
+                log.warn("[WebhookDLQ] 재시도 실패 ({}회) - merchantId: {}, txId: {}",
+                        deadLetter.getAttemptCount(), deadLetter.getMerchantId(), deadLetter.getTxId());
             }
         }
-
         deadLetterRepository.save(deadLetter);
     }
 
@@ -110,7 +135,7 @@ public class WebhookRetryService {
 
     private String hmacSha256(String secret, String data) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(secret.getBytes(), "HmacSHA256"));
-        return HexFormat.of().formatHex(mac.doFinal(data.getBytes()));
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        return HexFormat.of().formatHex(mac.doFinal(data.getBytes(StandardCharsets.UTF_8)));
     }
 }

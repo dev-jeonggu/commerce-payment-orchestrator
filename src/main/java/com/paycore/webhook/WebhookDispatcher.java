@@ -13,6 +13,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import reactor.core.scheduler.Schedulers;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HexFormat;
 
@@ -88,7 +89,7 @@ public class WebhookDispatcher {
 
     private String hmacSha256(String secret, String data) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(secret.getBytes(), "HmacSHA256"));
-        return HexFormat.of().formatHex(mac.doFinal(data.getBytes()));
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        return HexFormat.of().formatHex(mac.doFinal(data.getBytes(StandardCharsets.UTF_8)));
     }
 }
