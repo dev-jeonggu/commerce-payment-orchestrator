@@ -1,10 +1,15 @@
-version: '3.8'
-
-# 로컬 개발용 - 인프라(DB, Redis)만 실행
+# 로컬 개발용 — 인프라(DB, Redis, ELK)만 실행
 # 앱은 IDE에서 직접 실행
 #
 # 사용법:
 #   docker-compose -f docker-compose.infra.yml up -d
+#
+# 포트 정리:
+#   5432  PostgreSQL
+#   6379  Redis
+#   9200  Elasticsearch
+#   5601  Kibana
+#   5044  Logstash (Filebeat beats 입력)
 
 services:
   postgres:
@@ -38,6 +43,62 @@ services:
       timeout: 5s
       retries: 5
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: paycore-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: paycore-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  logstash:
+    build:
+      context: ./elk/logstash
+      dockerfile: Dockerfile
+    container_name: paycore-logstash
+    environment:
+      - ELASTICSEARCH_HOST=elasticsearch
+      - DB_HOST=postgres
+      - DB_NAME=paycore
+      - DB_USERNAME=paycore
+      - DB_PASSWORD=paycore1234
+    volumes:
+      - ./elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./elk/logstash/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - logstash_data:/usr/share/logstash/data
+    ports:
+      - "5044:5044"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:
+  es_data:
+  logstash_data:

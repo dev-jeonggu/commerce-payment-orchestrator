@@ -1,37 +1,55 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <springProperty scope="context" name="APP_NAME" source="spring.application.name"/>
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="paycore"/>
 
+    <!-- 개발 환경: 사람이 읽기 좋은 plain text -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <!--
-                %X{traceId} / %X{spanId}: Micrometer Tracing이 MDC에 자동 주입.
-                결제 요청 전체 흐름을 traceId로 추적 가능.
-            -->
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-},%X{spanId:-}] [%X{merchantId:-}] %-5level %logger{36} - %msg%n</pattern>
             <charset>UTF-8</charset>
         </encoder>
     </appender>
 
+    <!--
+        운영 환경: Filebeat가 파싱할 수 있는 JSON 형식.
+        LogstashEncoder는 MDC 필드(traceId, spanId, merchantId, requestId 등)를
+        자동으로 JSON 최상위 필드로 포함시킨다.
+    -->
     <springProfile name="prod">
-        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
             <file>logs/paycore.log</file>
             <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
                 <fileNamePattern>logs/paycore.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
                 <timeBasedFileNamingAndTriggeringPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
                     <maxFileSize>100MB</maxFileSize>
                 </timeBasedFileNamingAndTriggeringPolicy>
-                <maxHistory>30</maxHistory>
+                <maxHistory>7</maxHistory>
             </rollingPolicy>
-            <encoder>
-                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{traceId:-},%X{spanId:-}] %-5level %logger{36} - %msg%n</pattern>
-                <charset>UTF-8</charset>
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <!-- Filebeat/Kibana에서 앱과 환경을 구분하는 고정 필드 -->
+                <customFields>{"app":"${APP_NAME}","env":"prod"}</customFields>
+                <!-- traceId/spanId는 Micrometer가 MDC에 자동 주입하므로 별도 설정 불필요 -->
+                <fieldNames>
+                    <timestamp>@timestamp</timestamp>
+                    <message>message</message>
+                    <logger>logger</logger>
+                    <thread>thread</thread>
+                    <level>level</level>
+                </fieldNames>
             </encoder>
+        </appender>
+
+        <!-- 비동기 래퍼: I/O 지연이 애플리케이션 스레드를 블록하지 않도록 -->
+        <appender name="ASYNC_JSON_FILE" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="JSON_FILE"/>
+            <queueSize>1024</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <includeCallerData>false</includeCallerData>
         </appender>
 
         <root level="INFO">
             <appender-ref ref="CONSOLE"/>
-            <appender-ref ref="FILE"/>
+            <appender-ref ref="ASYNC_JSON_FILE"/>
         </root>
     </springProfile>
 

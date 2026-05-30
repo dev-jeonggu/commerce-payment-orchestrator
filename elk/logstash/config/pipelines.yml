@@ -1,0 +1,9 @@
+# Pipeline 1: 앱 로그 (Filebeat → Logstash → ES)
+- pipeline.id: app-logs
+  path.config: "/usr/share/logstash/pipeline/app-logs.conf"
+  pipeline.workers: 2
+
+# Pipeline 2: payment_logs 테이블 실시간 대시보드용 (JDBC → ES)
+- pipeline.id: payment-logs
+  path.config: "/usr/share/logstash/pipeline/payment-logs.conf"
+  pipeline.workers: 1
