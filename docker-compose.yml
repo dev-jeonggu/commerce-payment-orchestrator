@@ -34,6 +34,82 @@ services:
     networks:
       - paycore-net
 
+  # ─── ELK Stack ─────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: paycore-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - paycore-net
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    container_name: paycore-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - paycore-net
+
+  logstash:
+    build:
+      context: ./elk/logstash
+      dockerfile: Dockerfile
+    container_name: paycore-logstash
+    environment:
+      - ELASTICSEARCH_HOST=elasticsearch
+      - DB_HOST=postgres
+      - DB_NAME=paycore
+      - DB_USERNAME=paycore
+      - DB_PASSWORD=paycore1234
+    volumes:
+      - ./elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./elk/logstash/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - logstash_data:/usr/share/logstash/data
+    ports:
+      - "5044:5044"   # Filebeat beats 프로토콜
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - paycore-net
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.13.0
+    container_name: paycore-filebeat
+    user: root
+    command: filebeat -e -strict.perms=false
+    volumes:
+      - ./elk/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - app_logs:/app/logs:ro          # 앱이 기록한 JSON 로그 공유 볼륨
+      - filebeat_data:/usr/share/filebeat/data
+    depends_on:
+      - logstash
+    networks:
+      - paycore-net
+
+  # ─── Application ───────────────────────────────────────────────
   backend:
     build:
       context: .
@@ -50,10 +126,14 @@ services:
       PORTONE_IMP_KEY: ${PORTONE_IMP_KEY:-test_imp_key}
       PORTONE_IMP_SECRET: ${PORTONE_IMP_SECRET:-test_imp_secret}
       CORS_ALLOWED_ORIGINS: "*"
+    volumes:
+      - app_logs:/app/logs               # Filebeat와 로그 공유
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api-docs > /dev/null || exit 1"]
@@ -88,3 +168,7 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  es_data:
+  logstash_data:
+  filebeat_data:
+  app_logs:       # 앱 ↔ Filebeat 간 로그 파일 공유
