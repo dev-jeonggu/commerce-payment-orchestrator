@@ -3,6 +3,7 @@ package com.paycore.virtualaccount.service;
 import com.paycore.common.exception.ErrorCode;
 import com.paycore.common.exception.PaycoreException;
 import com.paycore.merchant.domain.Merchant;
+import com.paycore.merchant.domain.MerchantStatus;
 import com.paycore.merchant.service.MerchantService;
 import com.paycore.payment.domain.Payment;
 import com.paycore.payment.method.PaymentMethod;
@@ -42,7 +43,10 @@ public class VirtualAccountService {
      */
     @Transactional
     public VirtualAccountResponse issue(VirtualAccountIssueRequest request) {
-        merchantService.getMerchantOrThrow(request.getMerchantId());
+        Merchant merchant = merchantService.getMerchantOrThrow(request.getMerchantId());
+        if (merchant.getStatus() == MerchantStatus.SUSPENDED) {
+            throw new PaycoreException(ErrorCode.MERCHANT_SUSPENDED);
+        }
 
         virtualAccountRepository.findByMerchantOrderId(request.getMerchantOrderId()).ifPresent(existing -> {
             if (existing.isIssued()) {
@@ -145,21 +149,28 @@ public class VirtualAccountService {
     }
 
     private void dispatchDepositWebhook(String merchantId, Payment payment) {
+        Merchant merchant;
         try {
-            Merchant merchant = merchantService.getMerchantOrThrow(merchantId);
-            WebhookPayload payload = WebhookPayload.builder()
-                    .txId(payment.getTxId())
-                    .merchantOrderId(payment.getMerchantOrderId())
-                    .status("paid")
-                    .amount(payment.getPaidAmount())
-                    .paymentMethod(payment.getPaymentMethod().name())
-                    .paidAt(LocalDateTime.now())
-                    .build();
-            webhookDispatcher.dispatch(merchant, payload);
+            merchant = merchantService.getMerchantOrThrow(merchantId);
         } catch (Exception e) {
-            log.error("[VirtualAccountService] 입금 확인 Webhook 발송 실패 - merchantOrderId: {} (수동 확인 필요)",
-                    payment.getMerchantOrderId(), e);
+            // 가맹점 정보가 없으면 webhookUrl/webhookSecret를 알 수 없으므로 DLQ 저장 불가.
+            // 입금 처리 자체는 완료됐으므로 운영자가 수동으로 통보해야 한다.
+            log.error("[VirtualAccountService] 가맹점 정보 조회 실패로 Webhook 발송 불가 - merchantId: {}, merchantOrderId: {} (수동 처리 필요)",
+                    merchantId, payment.getMerchantOrderId(), e);
+            return;
         }
+
+        WebhookPayload payload = WebhookPayload.builder()
+                .txId(payment.getTxId())
+                .merchantOrderId(payment.getMerchantOrderId())
+                .status("paid")
+                .amount(payment.getPaidAmount())
+                .paymentMethod(payment.getPaymentMethod().name())
+                .paidAt(LocalDateTime.now())
+                .build();
+
+        // dispatch()는 @Async + 실패 시 내부에서 DLQ 저장까지 처리
+        webhookDispatcher.dispatch(merchant, payload);
     }
 
     public static class AlreadyIssuedVirtualAccountException extends RuntimeException {
