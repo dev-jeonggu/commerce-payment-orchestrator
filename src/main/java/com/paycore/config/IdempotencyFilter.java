@@ -58,8 +58,12 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             return;
         }
 
-        String cacheKey = CACHE_PREFIX + idempotencyKey;
-        String lockKey  = LOCK_PREFIX  + idempotencyKey;
+        // merchantId로 네임스페이스 분리: 서로 다른 가맹점이 동일 키를 사용해도 충돌 없음
+        String merchantId = request.getHeader("X-Merchant-Id");
+        String namespace = (merchantId != null && !merchantId.isBlank()) ? merchantId : "_global";
+
+        String cacheKey = CACHE_PREFIX + namespace + ":" + idempotencyKey;
+        String lockKey  = LOCK_PREFIX  + namespace + ":" + idempotencyKey;
 
         // 이미 처리 완료된 요청 → 캐시 응답 반환
         String cachedResponse = redisTemplate.opsForValue().get(cacheKey);
