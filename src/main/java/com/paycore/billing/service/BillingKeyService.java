@@ -8,6 +8,7 @@ import com.paycore.billing.domain.BillingKey;
 import com.paycore.billing.repository.BillingKeyRepository;
 import com.paycore.common.exception.ErrorCode;
 import com.paycore.common.exception.PaycoreException;
+import com.paycore.lock.DistributedLockService;
 import com.paycore.merchant.domain.Merchant;
 import com.paycore.merchant.service.MerchantService;
 import com.paycore.payment.domain.Payment;
@@ -45,6 +46,7 @@ public class BillingKeyService {
     private final PaymentMethodRouter paymentMethodRouter;
     private final MerchantService merchantService;
     private final WebhookDispatcher webhookDispatcher;
+    private final DistributedLockService distributedLockService;
 
     @Transactional
     public BillingKeyResponse register(BillingKeyRegisterRequest request) {
@@ -83,10 +85,16 @@ public class BillingKeyService {
      *
      * [보안] getDecryptedPgBillingKey()로 복호화 → 결제 API에만 전달 → 즉시 GC
      * [중복 결제 방지] 동일 merchantOrderId에 이미 Payment가 있으면 차단.
+     * [레이스 컨디션] delete와 charge 동시 호출 시 삭제된 빌링키로 결제되는 케이스 방어 → 분산 락.
      * [Webhook] 결제 완료 후 가맹점에게 즉시 비동기 발송.
      */
-    @Transactional
     public BillingKeyChargeResponse charge(BillingKeyChargeRequest request) {
+        return distributedLockService.executeWithBillingKeyLock(
+                request.getBillingKeyId(), () -> doCharge(request));
+    }
+
+    @Transactional
+    public BillingKeyChargeResponse doCharge(BillingKeyChargeRequest request) {
         Merchant merchant = merchantService.getMerchantOrThrow(request.getMerchantId());
 
         if (paymentRepository.existsByMerchantOrderId(request.getMerchantOrderId())) {
@@ -134,8 +142,15 @@ public class BillingKeyService {
         return BillingKeyChargeResponse.of(payment);
     }
 
-    @Transactional
     public void delete(Long billingKeyId, Long userId) {
+        distributedLockService.executeWithBillingKeyLock(billingKeyId, () -> {
+            doDelete(billingKeyId, userId);
+            return null;
+        });
+    }
+
+    @Transactional
+    public void doDelete(Long billingKeyId, Long userId) {
         BillingKey billingKey = billingKeyRepository
                 .findByIdAndUserIdAndDeletedFalse(billingKeyId, userId)
                 .orElseThrow(() -> new PaycoreException(ErrorCode.BILLING_KEY_NOT_FOUND));
