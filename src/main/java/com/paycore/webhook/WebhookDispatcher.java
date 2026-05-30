@@ -12,6 +12,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.time.Duration;
 import java.util.HexFormat;
 
 /**
@@ -43,36 +44,42 @@ public class WebhookDispatcher {
             return;
         }
 
+        String signature;
         try {
-            String signature = hmacSha256(merchant.getWebhookSecret(), body);
-
-            webClientBuilder.build()
-                    .post()
-                    .uri(merchant.getWebhookUrl())
-                    .header("X-Paycore-Signature", signature)
-                    .header("Content-Type", "application/json")
-                    .bodyValue(body)
-                    .retrieve()
-                    .toBodilessEntity()
-                    .block();
-
-            log.info("[WebhookDispatcher] 발송 완료 - merchantId: {}, txId: {}",
-                    merchant.getMerchantId(), payload.getTxId());
-
+            signature = hmacSha256(merchant.getWebhookSecret(), body);
         } catch (Exception e) {
-            log.error("[WebhookDispatcher] 발송 실패 - merchantId: {}, txId: {} → DLQ 저장",
-                    merchant.getMerchantId(), payload.getTxId(), e);
-
-            webhookRetryService.saveToDlq(
-                    merchant.getMerchantId(),
-                    payload.getTxId(),
-                    payload.getMerchantOrderId(),
-                    merchant.getWebhookUrl(),
-                    merchant.getWebhookSecret(),
-                    body,
-                    e.getMessage()
-            );
+            log.error("[WebhookDispatcher] HMAC 서명 실패 - merchantId: {}", merchant.getMerchantId(), e);
+            return;
         }
+
+        // .block() 제거 → subscribe()로 전환. @Async 스레드풀 스레드를 즉시 반환하고
+        // 실제 HTTP I/O는 Reactor Netty 스레드에서 처리.
+        webClientBuilder.build()
+                .post()
+                .uri(merchant.getWebhookUrl())
+                .header("X-Paycore-Signature", signature)
+                .header("Content-Type", "application/json")
+                .bodyValue(body)
+                .retrieve()
+                .toBodilessEntity()
+                .timeout(Duration.ofSeconds(10))
+                .subscribe(
+                        __ -> log.info("[WebhookDispatcher] 발송 완료 - merchantId: {}, txId: {}",
+                                merchant.getMerchantId(), payload.getTxId()),
+                        e -> {
+                            log.error("[WebhookDispatcher] 발송 실패 - merchantId: {}, txId: {} → DLQ 저장",
+                                    merchant.getMerchantId(), payload.getTxId(), e);
+                            webhookRetryService.saveToDlq(
+                                    merchant.getMerchantId(),
+                                    payload.getTxId(),
+                                    payload.getMerchantOrderId(),
+                                    merchant.getWebhookUrl(),
+                                    merchant.getWebhookSecret(),
+                                    body,
+                                    e.getMessage()
+                            );
+                        }
+                );
     }
 
     private String hmacSha256(String secret, String data) throws Exception {
