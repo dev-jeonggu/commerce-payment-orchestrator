@@ -24,6 +24,14 @@ paycore:
     # 운영 환경에서는 반드시 환경변수로 주입 (INTERNAL_WEBHOOK_TOKEN).
     webhook-token: ${INTERNAL_WEBHOOK_TOKEN:dev-internal-webhook-token-change-in-prod}
 
+management:
+  tracing:
+    sampling:
+      probability: 1.0   # dev: 100% 샘플링. prod는 0.1 (10%)로 낮출 것.
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
