@@ -2,11 +2,14 @@ package com.paycore.billing.service;
 
 import com.paycore.billing.controller.dto.BillingKeyChargeRequest;
 import com.paycore.billing.controller.dto.BillingKeyChargeResponse;
+import com.paycore.billing.controller.dto.BillingKeyRegisterRequest;
+import com.paycore.billing.controller.dto.BillingKeyResponse;
 import com.paycore.billing.domain.BillingKey;
 import com.paycore.billing.repository.BillingKeyRepository;
 import com.paycore.common.exception.ErrorCode;
 import com.paycore.common.exception.PaycoreException;
 import com.paycore.merchant.domain.Merchant;
+import com.paycore.merchant.domain.MerchantStatus;
 import com.paycore.merchant.service.MerchantService;
 import com.paycore.payment.domain.Payment;
 import com.paycore.payment.method.PaymentMethod;
@@ -43,8 +46,37 @@ public class BillingKeyProcessor {
     private final WebhookDispatcher webhookDispatcher;
 
     @Transactional
+    public BillingKeyResponse register(BillingKeyRegisterRequest request) {
+        merchantService.getMerchantOrThrow(request.getMerchantId());
+
+        if (request.isDefault()) {
+            billingKeyRepository
+                    .findByMerchantIdAndUserIdAndIsDefaultTrueAndDeletedFalse(
+                            request.getMerchantId(), request.getUserId())
+                    .ifPresent(existing -> existing.setDefault(false));
+        }
+
+        BillingKey billingKey = BillingKey.builder()
+                .merchantId(request.getMerchantId())
+                .userId(request.getUserId())
+                .pgBillingKey(request.getPgBillingKey())
+                .maskedCardNo(request.getMaskedCardNo())
+                .cardCompany(request.getCardCompany())
+                .isDefault(request.isDefault())
+                .build();
+
+        billingKeyRepository.save(billingKey);
+        log.info("[BillingKeyProcessor] 빌링키 등록 - merchantId: {}, userId: {}, masked: {}",
+                request.getMerchantId(), request.getUserId(), request.getMaskedCardNo());
+        return BillingKeyResponse.of(billingKey);
+    }
+
+    @Transactional
     public BillingKeyChargeResponse charge(BillingKeyChargeRequest request) {
         Merchant merchant = merchantService.getMerchantOrThrow(request.getMerchantId());
+        if (merchant.getStatus() == MerchantStatus.SUSPENDED) {
+            throw new PaycoreException(ErrorCode.MERCHANT_SUSPENDED);
+        }
 
         if (paymentRepository.existsByMerchantOrderId(request.getMerchantOrderId())) {
             throw new PaycoreException(ErrorCode.PAYMENT_ALREADY_PROCESSED,

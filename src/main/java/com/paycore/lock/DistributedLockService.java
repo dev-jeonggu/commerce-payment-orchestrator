@@ -30,8 +30,9 @@ public class DistributedLockService {
 
     private static final String PAYMENT_LOCK_PREFIX = "lock:payment:";
     private static final String BILLING_KEY_LOCK_PREFIX = "lock:billing-key:";
+    private static final String BILLING_KEY_REGISTER_LOCK_PREFIX = "lock:billing-key-register:";
     private static final long WAIT_TIME = 5L;
-    private static final long LEASE_TIME = 10L;
+    private static final long LEASE_TIME = 30L; // 외부 PG API 호출 포함 여유 확보
 
     /**
      * 결제 검증용 분산락 실행
@@ -87,6 +88,35 @@ public class DistributedLockService {
             if (lock.isHeldByCurrentThread()) {
                 lock.unlock();
                 log.debug("[DistributedLock] 빌링키 락 해제 - key: {}", lockKey);
+            }
+        }
+    }
+
+    /**
+     * 빌링키 등록 직렬화용 분산락 (merchantId + userId 복합 키)
+     * 동시에 isDefault=true 등록 시 복수 default 빌링키 생성 방지
+     */
+    public <T> T executeWithBillingKeyRegisterLock(String merchantId, Long userId, LockCallback<T> callback) {
+        String lockKey = BILLING_KEY_REGISTER_LOCK_PREFIX + merchantId + ":" + userId;
+        RLock lock = redissonClient.getLock(lockKey);
+
+        try {
+            boolean acquired = lock.tryLock(WAIT_TIME, LEASE_TIME, TimeUnit.SECONDS);
+            if (!acquired) {
+                log.warn("[DistributedLock] 빌링키 등록 락 획득 실패 - key: {}", lockKey);
+                throw new PaycoreException(ErrorCode.LOCK_ACQUISITION_FAILED);
+            }
+
+            log.debug("[DistributedLock] 빌링키 등록 락 획득 - key: {}", lockKey);
+            return callback.execute();
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PaycoreException(ErrorCode.LOCK_ACQUISITION_FAILED);
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+                log.debug("[DistributedLock] 빌링키 등록 락 해제 - key: {}", lockKey);
             }
         }
     }

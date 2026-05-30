@@ -6,10 +6,7 @@ import com.paycore.billing.controller.dto.BillingKeyRegisterRequest;
 import com.paycore.billing.controller.dto.BillingKeyResponse;
 import com.paycore.billing.domain.BillingKey;
 import com.paycore.billing.repository.BillingKeyRepository;
-import com.paycore.common.exception.ErrorCode;
-import com.paycore.common.exception.PaycoreException;
 import com.paycore.lock.DistributedLockService;
-import com.paycore.merchant.service.MerchantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -33,29 +30,13 @@ public class BillingKeyService {
     private final BillingKeyRepository billingKeyRepository;
     private final BillingKeyProcessor billingKeyProcessor;
     private final DistributedLockService distributedLockService;
-    private final MerchantService merchantService;
 
-    @Transactional
     public BillingKeyResponse register(BillingKeyRegisterRequest request) {
-        merchantService.getMerchantOrThrow(request.getMerchantId());
-
-        if (request.isDefault()) {
-            clearDefaultBillingKey(request.getMerchantId(), request.getUserId());
-        }
-
-        BillingKey billingKey = BillingKey.builder()
-                .merchantId(request.getMerchantId())
-                .userId(request.getUserId())
-                .pgBillingKey(request.getPgBillingKey())
-                .maskedCardNo(request.getMaskedCardNo())
-                .cardCompany(request.getCardCompany())
-                .isDefault(request.isDefault())
-                .build();
-
-        billingKeyRepository.save(billingKey);
-        log.info("[BillingKeyService] 빌링키 등록 - merchantId: {}, userId: {}, masked: {}",
-                request.getMerchantId(), request.getUserId(), request.getMaskedCardNo());
-        return BillingKeyResponse.of(billingKey);
+        // isDefault 등록 시 기존 default 해제 + 신규 저장을 원자적으로 처리.
+        // BillingKeyProcessor.register()로 위임해 @Transactional이 Spring 프록시를 통해 적용되도록 함.
+        return distributedLockService.executeWithBillingKeyRegisterLock(
+                request.getMerchantId(), request.getUserId(),
+                () -> billingKeyProcessor.register(request));
     }
 
     @Transactional(readOnly = true)
@@ -86,9 +67,4 @@ public class BillingKeyService {
         });
     }
 
-    private void clearDefaultBillingKey(String merchantId, Long userId) {
-        billingKeyRepository
-                .findByMerchantIdAndUserIdAndIsDefaultTrueAndDeletedFalse(merchantId, userId)
-                .ifPresent(existing -> existing.setDefault(false));
-    }
 }
