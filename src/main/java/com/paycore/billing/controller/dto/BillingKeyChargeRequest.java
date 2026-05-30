@@ -12,6 +12,10 @@ import lombok.NoArgsConstructor;
 @Schema(description = "빌링키 결제 요청 (자동결제/정기결제)")
 public class BillingKeyChargeRequest {
 
+    @NotBlank
+    @Schema(description = "가맹점 ID", example = "A010084434")
+    private String merchantId;
+
     @NotNull
     @Schema(description = "사용자 ID", example = "1")
     private Long userId;
@@ -21,8 +25,8 @@ public class BillingKeyChargeRequest {
     private Long billingKeyId;
 
     @NotBlank
-    @Schema(description = "주문번호", example = "ORD-20260519-A1B2C3")
-    private String orderId;
+    @Schema(description = "가맹점 주문번호", example = "ORD-20260519-A1B2C3")
+    private String merchantOrderId;
 
     @NotNull
     @Min(100)
