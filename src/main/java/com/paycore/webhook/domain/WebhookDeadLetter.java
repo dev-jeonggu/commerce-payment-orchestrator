@@ -1,5 +1,6 @@
 package com.paycore.webhook.domain;
 
+import com.paycore.billing.crypto.AES256Converter;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -45,7 +46,8 @@ public class WebhookDeadLetter {
     @Column(name = "webhook_url", nullable = false, length = 500)
     private String webhookUrl;
 
-    @Column(name = "webhook_secret", nullable = false, length = 200)
+    @Convert(converter = AES256Converter.class)
+    @Column(name = "webhook_secret", nullable = false, length = 500)
     private String webhookSecret;
 
     /** 발송할 JSON 페이로드 원문 */
