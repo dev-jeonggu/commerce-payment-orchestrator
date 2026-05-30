@@ -4,6 +4,7 @@ import com.paycore.virtualaccount.domain.VirtualAccount;
 import com.paycore.virtualaccount.domain.VirtualAccountStatus;
 import com.paycore.virtualaccount.repository.VirtualAccountRepository;
 import com.paycore.virtualaccount.service.VirtualAccountService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -79,7 +80,7 @@ public class PaymentRecoveryScheduler {
 
         for (VirtualAccount va : issuedVas) {
             try {
-                paymentRecoveryService.recoverVirtualAccountWithTx(va, virtualAccountService);
+                paymentRecoveryService.recoverVirtualAccountWithTx(va.getTxId(), virtualAccountService);
             } catch (Exception e) {
                 log.error("[Scheduler] 가상계좌 복구 실패 - merchantOrderId: {} (수동 처리 필요)",
                         va.getMerchantOrderId(), e);

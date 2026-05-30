@@ -1,11 +1,11 @@
 package com.paycore.scheduler;
 
-import com.paycore.payment.domain.Payment;
 import com.paycore.payment.domain.PaymentLog;
 import com.paycore.payment.method.PaymentMethodRouter;
 import com.paycore.payment.method.cmd.PaymentDetail;
-import com.paycore.payment.repository.PaymentRepository;
 import com.paycore.payment.service.PaymentLogService;
+import com.paycore.virtualaccount.domain.VirtualAccount;
+import com.paycore.virtualaccount.domain.VirtualAccountStatus;
 import com.paycore.virtualaccount.repository.VirtualAccountRepository;
 import com.paycore.virtualaccount.service.VirtualAccountService;
 import lombok.RequiredArgsConstructor;
@@ -25,77 +25,58 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PaymentRecoveryService {
 
-    private final PaymentRepository paymentRepository;
     private final PaymentMethodRouter paymentMethodRouter;
     private final PaymentLogService paymentLogService;
     private final VirtualAccountRepository virtualAccountRepository;
 
     /**
-     * 미완료 결제 복구: Payment 기반으로 txId로 실제 상태 재조회
+     * 가상계좌 Webhook 누락 복구
+     *
+     * txId만 받아 이 메서드 내에서 DB를 fresh하게 재조회한다.
+     * 스케줄러에서 로드한 VirtualAccount 엔티티를 그대로 전달하면
+     * detached 엔티티의 stale 상태로 isDeposited() 판단이 틀릴 수 있다.
      */
     @Transactional
-    public boolean recoverPaymentWithTx(Payment payment) {
-        log.info("[RecoveryService] 결제 복구 처리 - merchantOrderId: {}, txId: {}",
-                payment.getMerchantOrderId(), payment.getTxId());
-
-        PaymentDetail detail;
-        try {
-            detail = paymentMethodRouter.route(payment.getPaymentMethod())
-                    .getPaymentByTxId(payment.getTxId());
-        } catch (Exception e) {
-            log.warn("[RecoveryService] 결제 조회 실패 - merchantOrderId: {}",
-                    payment.getMerchantOrderId(), e);
-            paymentLogService.saveLog(payment.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, null, false, "결제 조회 실패: " + e.getMessage());
-            return false;
+    public void recoverVirtualAccountWithTx(String txId, VirtualAccountService virtualAccountService) {
+        // detached 엔티티 대신 fresh DB 조회로 현재 상태를 정확히 확인
+        VirtualAccount fresh = virtualAccountRepository.findByTxId(txId).orElse(null);
+        if (fresh == null) {
+            log.warn("[RecoveryService] 가상계좌 없음 - txId: {}", txId);
+            return;
         }
 
-        if (detail.isPaid()) {
-            paymentLogService.saveLog(payment.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, detail, true, null);
-            log.info("[RecoveryService] 결제 상태 확인 완료 (PAID) - merchantOrderId: {}",
-                    payment.getMerchantOrderId());
-            return true;
-        } else {
-            paymentLogService.saveLog(payment.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
-                    null, detail, false, "결제 미완료 상태: " + detail.getStatus());
-            return false;
-        }
-    }
-
-    /**
-     * 가상계좌 Webhook 누락 복구: txId로 입금 여부 직접 조회
-     */
-    @Transactional
-    public void recoverVirtualAccountWithTx(
-            com.paycore.virtualaccount.domain.VirtualAccount va,
-            VirtualAccountService virtualAccountService) {
-
-        if (va.isDeposited()) {
+        if (fresh.getStatus() == VirtualAccountStatus.DEPOSITED) {
             log.debug("[RecoveryService] 가상계좌 이미 입금 완료 스킵 - merchantOrderId: {}",
-                    va.getMerchantOrderId());
+                    fresh.getMerchantOrderId());
+            return;
+        }
+
+        if (fresh.getStatus() == VirtualAccountStatus.EXPIRED) {
+            log.debug("[RecoveryService] 만료된 가상계좌 복구 스킵 - merchantOrderId: {}",
+                    fresh.getMerchantOrderId());
             return;
         }
 
         PaymentDetail detail;
         try {
-            detail = paymentMethodRouter.route(com.paycore.payment.method.PaymentMethod.VIRTUAL_ACCOUNT)
-                    .getPaymentByTxId(va.getTxId());
+            detail = paymentMethodRouter
+                    .route(com.paycore.payment.method.PaymentMethod.VIRTUAL_ACCOUNT)
+                    .getPaymentByTxId(txId);
         } catch (Exception e) {
             log.warn("[RecoveryService] 가상계좌 조회 실패 - merchantOrderId: {}",
-                    va.getMerchantOrderId(), e);
+                    fresh.getMerchantOrderId(), e);
             return;
         }
 
         if (detail.isPaid()) {
             log.info("[RecoveryService] 가상계좌 입금 확인(복구) - merchantOrderId: {}",
-                    va.getMerchantOrderId());
-            virtualAccountService.processDeposit(va.getTxId());
-            paymentLogService.saveLog(va.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
+                    fresh.getMerchantOrderId());
+            virtualAccountService.processDeposit(txId);
+            paymentLogService.saveLog(fresh.getMerchantOrderId(), PaymentLog.LogType.SCHEDULER_RECOVERY,
                     null, detail, true, "가상계좌 입금 복구");
         } else {
             log.debug("[RecoveryService] 가상계좌 미입금 - merchantOrderId: {}, 상태: {}",
-                    va.getMerchantOrderId(), detail.getStatus());
+                    fresh.getMerchantOrderId(), detail.getStatus());
         }
     }
 }
