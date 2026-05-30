@@ -1,6 +1,6 @@
 package com.paycore.payment.domain;
 
-import com.paycore.payment.pg.PgProvider;
+import com.paycore.payment.method.PaymentMethod;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -15,7 +15,7 @@ import java.time.LocalDateTime;
 @Table(
     name = "payments",
     indexes = {
-        @Index(name = "idx_payment_merchant_uid", columnList = "merchant_uid")
+        @Index(name = "idx_payment_merchant_order", columnList = "merchant_order_id")
     }
 )
 @Getter
@@ -27,27 +27,21 @@ public class Payment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "order_id", nullable = false)
-    private Long orderId;
+    /** 어느 가맹점의 결제인지 */
+    @Column(name = "merchant_id", nullable = false)
+    private String merchantId;
 
-    /**
-     * PG사 고유 결제번호 (iamport imp_uid)
-     */
-    @Column(name = "imp_uid", nullable = false, unique = true)
-    private String impUid;
+    /** 우리 내부 트랜잭션 ID */
+    @Column(name = "tx_id", nullable = false, unique = true)
+    private String txId;
 
-    /**
-     * 가맹점 주문번호 (= orderNo)
-     */
-    @Column(name = "merchant_uid", nullable = false)
-    private String merchantUid;
-
-    @Column(name = "pay_method")
-    private String payMethod;
+    /** 가맹점 주문번호 */
+    @Column(name = "merchant_order_id", nullable = false)
+    private String merchantOrderId;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "pg_provider")
-    private PgProvider pgProvider;
+    @Column(name = "payment_method", nullable = false)
+    private PaymentMethod paymentMethod;
 
     @Column(name = "paid_amount", nullable = false)
     private Long paidAmount;
@@ -67,19 +61,21 @@ public class Payment {
     private LocalDateTime updatedAt;
 
     @Builder
-    public Payment(Long orderId, String impUid, String merchantUid,
-                   String payMethod, Long paidAmount, PgProvider pgProvider) {
-        this.orderId = orderId;
-        this.impUid = impUid;
-        this.merchantUid = merchantUid;
-        this.payMethod = payMethod;
+    public Payment(String merchantId, String txId, String merchantOrderId,
+                   PaymentMethod paymentMethod, Long paidAmount) {
+        this.merchantId = merchantId;
+        this.txId = txId;
+        this.merchantOrderId = merchantOrderId;
+        this.paymentMethod = paymentMethod;
         this.paidAmount = paidAmount;
-        this.pgProvider = pgProvider != null ? pgProvider : PgProvider.PORTONE;
         this.cancelledAmount = 0L;
         this.status = PaymentStatus.PAID;
     }
 
     public void cancel(Long cancelAmount) {
+        if (this.status == PaymentStatus.CANCELLED) {
+            throw new IllegalStateException("이미 전액 취소된 결제입니다.");
+        }
         this.cancelledAmount = (this.cancelledAmount == null ? 0L : this.cancelledAmount) + cancelAmount;
         if (this.cancelledAmount.equals(this.paidAmount)) {
             this.status = PaymentStatus.CANCELLED;

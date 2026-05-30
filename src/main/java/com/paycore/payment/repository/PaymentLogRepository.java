@@ -7,5 +7,5 @@ import java.util.List;
 
 public interface PaymentLogRepository extends JpaRepository<PaymentLog, Long> {
 
-    List<PaymentLog> findByOrderNoOrderByCreatedAtDesc(String orderNo);
+    List<PaymentLog> findByMerchantOrderIdOrderByCreatedAtDesc(String merchantOrderId);
 }
