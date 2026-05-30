@@ -84,9 +84,12 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, responseWrapper);
         } finally {
             String responseBody = new String(responseWrapper.getContentAsByteArray(), StandardCharsets.UTF_8);
-            if (responseWrapper.getStatus() < 500) {
+            int status = responseWrapper.getStatus();
+            // 2xx 성공 응답만 캐시. 4xx(잘못된 요청)를 캐시하면 수정 후 재시도해도
+            // 동일 키로 캐시된 에러 응답이 반환되어 24시간 동안 결제 불가 상태가 된다.
+            if (status >= 200 && status < 300) {
                 redisTemplate.opsForValue().set(cacheKey, responseBody, CACHE_TTL);
-                log.debug("[Idempotency] 응답 캐시 저장 - key: {}, status: {}", idempotencyKey, responseWrapper.getStatus());
+                log.debug("[Idempotency] 응답 캐시 저장 - key: {}, status: {}", idempotencyKey, status);
             }
             redisTemplate.delete(lockKey);
             responseWrapper.copyBodyToResponse();
