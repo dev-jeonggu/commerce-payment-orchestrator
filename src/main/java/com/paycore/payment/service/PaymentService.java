@@ -100,7 +100,7 @@ public class PaymentService {
      */
     @Transactional
     public PaymentResponse cancelPayment(String merchantId, PaymentCancelRequest request) {
-        merchantService.getMerchantOrThrow(merchantId);
+        Merchant merchant = merchantService.getMerchantOrThrow(merchantId);
 
         Payment payment = paymentRepository.findByMerchantOrderId(request.getMerchantOrderId())
                 .orElseThrow(() -> new PaycoreException(ErrorCode.PAYMENT_NOT_FOUND));
@@ -130,6 +130,11 @@ public class PaymentService {
                 cancelCommand, null, true, null);
 
         log.info("[PaymentService] 결제 취소 완료 - merchantOrderId: {}", request.getMerchantOrderId());
+
+        String webhookStatus = payment.getStatus() == PaymentStatus.CANCELLED
+                ? "cancelled" : "partial_cancelled";
+        dispatchWebhook(merchant, payment, webhookStatus);
+
         return PaymentResponse.of(payment);
     }
 

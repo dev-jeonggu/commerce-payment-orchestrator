@@ -4,6 +4,7 @@ import com.paycore.virtualaccount.domain.VirtualAccount;
 import com.paycore.virtualaccount.domain.VirtualAccountStatus;
 import com.paycore.virtualaccount.repository.VirtualAccountRepository;
 import com.paycore.virtualaccount.service.VirtualAccountService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -66,9 +67,9 @@ public class PaymentRecoveryScheduler {
     }
 
     private void recoverPendingVirtualAccounts() {
-        // ISSUED 상태이면서 만료 기한이 지나지 않은 가상계좌 대상
+        // ISSUED 상태이면서 입금 기한이 지난 가상계좌 대상 (plusYears(1) 버그 수정)
         List<VirtualAccount> issuedVas = virtualAccountRepository
-                .findByStatusAndDueDateBefore(VirtualAccountStatus.ISSUED, LocalDateTime.now().plusYears(1));
+                .findByStatusAndDueDateBefore(VirtualAccountStatus.ISSUED, LocalDateTime.now());
 
         if (issuedVas.isEmpty()) {
             log.debug("[Scheduler] 가상계좌 입금 대기 복구 대상 없음");
@@ -79,7 +80,7 @@ public class PaymentRecoveryScheduler {
 
         for (VirtualAccount va : issuedVas) {
             try {
-                paymentRecoveryService.recoverVirtualAccountWithTx(va, virtualAccountService);
+                paymentRecoveryService.recoverVirtualAccountWithTx(va.getTxId(), virtualAccountService);
             } catch (Exception e) {
                 log.error("[Scheduler] 가상계좌 복구 실패 - merchantOrderId: {} (수동 처리 필요)",
                         va.getMerchantOrderId(), e);

@@ -12,6 +12,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import reactor.core.scheduler.Schedulers;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HexFormat;
 
 /**
@@ -43,41 +46,50 @@ public class WebhookDispatcher {
             return;
         }
 
+        String signature;
         try {
-            String signature = hmacSha256(merchant.getWebhookSecret(), body);
-
-            webClientBuilder.build()
-                    .post()
-                    .uri(merchant.getWebhookUrl())
-                    .header("X-Paycore-Signature", signature)
-                    .header("Content-Type", "application/json")
-                    .bodyValue(body)
-                    .retrieve()
-                    .toBodilessEntity()
-                    .block();
-
-            log.info("[WebhookDispatcher] 발송 완료 - merchantId: {}, txId: {}",
-                    merchant.getMerchantId(), payload.getTxId());
-
+            signature = hmacSha256(merchant.getWebhookSecret(), body);
         } catch (Exception e) {
-            log.error("[WebhookDispatcher] 발송 실패 - merchantId: {}, txId: {} → DLQ 저장",
-                    merchant.getMerchantId(), payload.getTxId(), e);
-
-            webhookRetryService.saveToDlq(
-                    merchant.getMerchantId(),
-                    payload.getTxId(),
-                    payload.getMerchantOrderId(),
-                    merchant.getWebhookUrl(),
-                    merchant.getWebhookSecret(),
-                    body,
-                    e.getMessage()
-            );
+            log.error("[WebhookDispatcher] HMAC 서명 실패 - merchantId: {}", merchant.getMerchantId(), e);
+            return;
         }
+
+        // publishOn(boundedElastic): HTTP 응답 수신 후 콜백을 boundedElastic 스레드로 전환.
+        // subscribe()의 성공/실패 콜백은 기본적으로 Netty IO 스레드에서 실행되는데,
+        // 에러 콜백의 saveToDlq()는 JDBC 블로킹 호출이므로 Netty IO 스레드를 점유하면
+        // Reactor 이벤트 루프가 멈춘다. boundedElastic은 블로킹 IO에 적합한 스레드풀.
+        webClientBuilder.build()
+                .post()
+                .uri(merchant.getWebhookUrl())
+                .header("X-Paycore-Signature", signature)
+                .header("Content-Type", "application/json")
+                .bodyValue(body)
+                .retrieve()
+                .toBodilessEntity()
+                .timeout(Duration.ofSeconds(10))
+                .publishOn(Schedulers.boundedElastic())
+                .subscribe(
+                        __ -> log.info("[WebhookDispatcher] 발송 완료 - merchantId: {}, txId: {}",
+                                merchant.getMerchantId(), payload.getTxId()),
+                        e -> {
+                            log.error("[WebhookDispatcher] 발송 실패 - merchantId: {}, txId: {} → DLQ 저장",
+                                    merchant.getMerchantId(), payload.getTxId(), e);
+                            webhookRetryService.saveToDlq(
+                                    merchant.getMerchantId(),
+                                    payload.getTxId(),
+                                    payload.getMerchantOrderId(),
+                                    merchant.getWebhookUrl(),
+                                    merchant.getWebhookSecret(),
+                                    body,
+                                    e.getMessage()
+                            );
+                        }
+                );
     }
 
     private String hmacSha256(String secret, String data) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(secret.getBytes(), "HmacSHA256"));
-        return HexFormat.of().formatHex(mac.doFinal(data.getBytes()));
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        return HexFormat.of().formatHex(mac.doFinal(data.getBytes(StandardCharsets.UTF_8)));
     }
 }

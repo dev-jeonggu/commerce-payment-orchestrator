@@ -1,9 +1,9 @@
 package com.paycore.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.paycore.merchant.domain.Merchant;
-import com.paycore.merchant.domain.MerchantStatus;
-import com.paycore.merchant.repository.MerchantRepository;
+import com.paycore.common.exception.PaycoreException;
+import com.paycore.merchant.domain.MerchantInfo;
+import com.paycore.merchant.service.MerchantService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * 가맹점 API Key 인증 인터셉터
@@ -35,7 +34,7 @@ public class MerchantAuthInterceptor implements HandlerInterceptor {
 
     public static final String AUTHENTICATED_MERCHANT_ID = "authenticatedMerchantId";
 
-    private final MerchantRepository merchantRepository;
+    private final MerchantService merchantService;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -50,22 +49,23 @@ public class MerchantAuthInterceptor implements HandlerInterceptor {
             return false;
         }
 
-        Optional<Merchant> merchantOpt = merchantRepository.findByMerchantId(merchantId);
-        if (merchantOpt.isEmpty()) {
+        // getMerchantInfoCached: Redis 캐시 경유 (TTL 5분). 미존재 시 PaycoreException.
+        MerchantInfo merchantInfo;
+        try {
+            merchantInfo = merchantService.getMerchantInfoCached(merchantId);
+        } catch (PaycoreException e) {
             log.warn("[MerchantAuth] 존재하지 않는 가맹점 - merchantId: {}", merchantId);
             writeUnauthorized(response, "인증에 실패했습니다.");
             return false;
         }
 
-        Merchant merchant = merchantOpt.get();
-
-        if (!merchant.getSecretKey().equals(apiKey)) {
+        if (!merchantInfo.getSecretKey().equals(apiKey)) {
             log.warn("[MerchantAuth] API Key 불일치 - merchantId: {}", merchantId);
             writeUnauthorized(response, "인증에 실패했습니다.");
             return false;
         }
 
-        if (merchant.getStatus() == MerchantStatus.SUSPENDED) {
+        if (merchantInfo.isSuspended()) {
             log.warn("[MerchantAuth] 정지된 가맹점 요청 - merchantId: {}", merchantId);
             writeUnauthorized(response, "정지된 가맹점입니다. 고객센터에 문의하세요.");
             return false;

@@ -1,5 +1,6 @@
 package com.paycore.merchant.domain;
 
+import com.paycore.billing.crypto.AES256Converter;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Builder;
@@ -24,12 +25,14 @@ public class Merchant {
     @Column(unique = true, nullable = false)
     private String merchantId;
 
+    @Convert(converter = AES256Converter.class)
     @Column(nullable = false)
     private String secretKey;
 
     @Column(nullable = false)
     private String webhookUrl;
 
+    @Convert(converter = AES256Converter.class)
     @Column(nullable = false)
     private String webhookSecret;
 

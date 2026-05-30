@@ -16,6 +16,9 @@ import java.time.LocalDateTime;
     name = "payments",
     indexes = {
         @Index(name = "idx_payment_merchant_order", columnList = "merchant_order_id")
+    },
+    uniqueConstraints = {
+        @UniqueConstraint(name = "uq_payment_merchant_order_id", columnNames = "merchant_order_id")
     }
 )
 @Getter
@@ -46,7 +49,7 @@ public class Payment {
     @Column(name = "paid_amount", nullable = false)
     private Long paidAmount;
 
-    @Column(name = "cancelled_amount")
+    @Column(name = "cancelled_amount", nullable = false, columnDefinition = "bigint default 0")
     private Long cancelledAmount;
 
     @Enumerated(EnumType.STRING)
