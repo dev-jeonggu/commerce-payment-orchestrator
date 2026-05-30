@@ -100,12 +100,12 @@ public class VirtualAccountExpiryScheduler {
             } catch (JpaOptimisticLockingFailureException | jakarta.persistence.OptimisticLockException e) {
                 // 낙관적 락 충돌 = 입금 Webhook이 먼저 DEPOSITED 처리 → 정상 케이스
                 skipped++;
-                log.info("[VA-Expiry-Scheduler] 낙관적 락 충돌 - 입금이 먼저 처리된 것으로 판단, 스킵 - vaId: {}, orderNo: {}",
-                        va.getId(), va.getOrderNo());
+                log.info("[VA-Expiry-Scheduler] 낙관적 락 충돌 - 입금이 먼저 처리된 것으로 판단, 스킵 - vaId: {}, merchantOrderId: {}",
+                        va.getId(), va.getMerchantOrderId());
             } catch (Exception e) {
                 fail++;
-                log.error("[VA-Expiry-Scheduler] 만료 처리 실패 - vaId: {}, orderNo: {} (수동 처리 필요)",
-                        va.getId(), va.getOrderNo(), e);
+                log.error("[VA-Expiry-Scheduler] 만료 처리 실패 - vaId: {}, merchantOrderId: {} (수동 처리 필요)",
+                        va.getId(), va.getMerchantOrderId(), e);
             }
         }
 

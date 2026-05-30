@@ -1,6 +1,5 @@
 package com.paycore.virtualaccount.controller.dto;
 
-import com.paycore.payment.pg.PgProvider;
 import com.paycore.virtualaccount.domain.VirtualAccount;
 import com.paycore.virtualaccount.domain.VirtualAccountStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -18,13 +17,10 @@ public class VirtualAccountResponse {
     private final Long id;
 
     @Schema(description = "가맹점 주문번호")
-    private final String orderNo;
+    private final String merchantOrderId;
 
-    @Schema(description = "PG사 결제 키")
-    private final String impUid;
-
-    @Schema(description = "PG사")
-    private final PgProvider pgProvider;
+    @Schema(description = "내부 트랜잭션 ID")
+    private final String txId;
 
     @Schema(description = "은행 코드")
     private final String bankCode;
@@ -56,9 +52,8 @@ public class VirtualAccountResponse {
     public static VirtualAccountResponse of(VirtualAccount va) {
         return VirtualAccountResponse.builder()
                 .id(va.getId())
-                .orderNo(va.getOrderNo())
-                .impUid(va.getImpUid())
-                .pgProvider(va.getPgProvider())
+                .merchantOrderId(va.getMerchantOrderId())
+                .txId(va.getTxId())
                 .bankCode(va.getBankCode())
                 .bankName(va.getBankName())
                 .accountNumber(va.getAccountNumber())
