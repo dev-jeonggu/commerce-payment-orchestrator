@@ -12,6 +12,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.util.HexFormat;
 
@@ -52,8 +53,10 @@ public class WebhookDispatcher {
             return;
         }
 
-        // .block() 제거 → subscribe()로 전환. @Async 스레드풀 스레드를 즉시 반환하고
-        // 실제 HTTP I/O는 Reactor Netty 스레드에서 처리.
+        // publishOn(boundedElastic): HTTP 응답 수신 후 콜백을 boundedElastic 스레드로 전환.
+        // subscribe()의 성공/실패 콜백은 기본적으로 Netty IO 스레드에서 실행되는데,
+        // 에러 콜백의 saveToDlq()는 JDBC 블로킹 호출이므로 Netty IO 스레드를 점유하면
+        // Reactor 이벤트 루프가 멈춘다. boundedElastic은 블로킹 IO에 적합한 스레드풀.
         webClientBuilder.build()
                 .post()
                 .uri(merchant.getWebhookUrl())
@@ -63,6 +66,7 @@ public class WebhookDispatcher {
                 .retrieve()
                 .toBodilessEntity()
                 .timeout(Duration.ofSeconds(10))
+                .publishOn(Schedulers.boundedElastic())
                 .subscribe(
                         __ -> log.info("[WebhookDispatcher] 발송 완료 - merchantId: {}, txId: {}",
                                 merchant.getMerchantId(), payload.getTxId()),
