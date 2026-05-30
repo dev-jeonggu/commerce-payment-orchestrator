@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -45,11 +46,19 @@ public class WebhookRetryScheduler {
         }
 
         try {
-            List<WebhookDeadLetter> pending = webhookRetryService.findPending();
-            if (pending.isEmpty()) return;
+            int page = 0;
+            final int batchSize = 100;
+            List<WebhookDeadLetter> pending;
 
-            log.info("[WebhookRetryScheduler] 재시도 시작 - {}건", pending.size());
-            pending.forEach(webhookRetryService::retry);
+            do {
+                pending = webhookRetryService.findPending(PageRequest.of(page, batchSize));
+                if (pending.isEmpty()) break;
+
+                log.info("[WebhookRetryScheduler] 재시도 배치 시작 - 페이지: {}, {}건", page, pending.size());
+                pending.forEach(webhookRetryService::retry);
+                page++;
+            } while (pending.size() == batchSize);
+
             log.info("[WebhookRetryScheduler] 재시도 완료");
         } finally {
             if (lock.isHeldByCurrentThread()) lock.unlock();

@@ -7,12 +7,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.orm.jpa.JpaOptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -81,35 +83,50 @@ public class VirtualAccountExpiryScheduler {
         }
     }
 
+    private static final int BATCH_SIZE = 100;
+
     private void doExpire() {
-        List<VirtualAccount> expiredList = virtualAccountRepository
-                .findByStatusAndDueDateBefore(VirtualAccountStatus.ISSUED, LocalDateTime.now());
+        Pageable pageable = PageRequest.of(0, BATCH_SIZE);
+        Page<VirtualAccount> page;
+        int totalSuccess = 0, totalSkipped = 0, totalFail = 0;
 
-        if (expiredList.isEmpty()) {
-            log.debug("[VA-Expiry-Scheduler] 만료 대상 없음");
-            return;
-        }
+        do {
+            page = virtualAccountRepository
+                    .findByStatusAndDueDateBefore(VirtualAccountStatus.ISSUED, LocalDateTime.now(), pageable);
 
-        log.info("[VA-Expiry-Scheduler] 가상계좌 만료 처리 시작 - 대상: {}건", expiredList.size());
+            if (page.isEmpty()) break;
 
-        int success = 0, skipped = 0, fail = 0;
-        for (VirtualAccount va : expiredList) {
-            try {
-                expiryProcessor.expire(va.getId());
-                success++;
-            } catch (JpaOptimisticLockingFailureException | jakarta.persistence.OptimisticLockException e) {
-                // 낙관적 락 충돌 = 입금 Webhook이 먼저 DEPOSITED 처리 → 정상 케이스
-                skipped++;
-                log.info("[VA-Expiry-Scheduler] 낙관적 락 충돌 - 입금이 먼저 처리된 것으로 판단, 스킵 - vaId: {}, merchantOrderId: {}",
-                        va.getId(), va.getMerchantOrderId());
-            } catch (Exception e) {
-                fail++;
-                log.error("[VA-Expiry-Scheduler] 만료 처리 실패 - vaId: {}, merchantOrderId: {} (수동 처리 필요)",
-                        va.getId(), va.getMerchantOrderId(), e);
+            log.info("[VA-Expiry-Scheduler] 만료 처리 배치 - 페이지: {}/{}, 건수: {}",
+                    page.getNumber() + 1, page.getTotalPages(), page.getNumberOfElements());
+
+            int success = 0, skipped = 0, fail = 0;
+            for (VirtualAccount va : page.getContent()) {
+                try {
+                    expiryProcessor.expire(va.getId());
+                    success++;
+                } catch (JpaOptimisticLockingFailureException | jakarta.persistence.OptimisticLockException e) {
+                    skipped++;
+                    log.info("[VA-Expiry-Scheduler] 낙관적 락 충돌 - 입금이 먼저 처리된 것으로 판단, 스킵 - vaId: {}, merchantOrderId: {}",
+                            va.getId(), va.getMerchantOrderId());
+                } catch (Exception e) {
+                    fail++;
+                    log.error("[VA-Expiry-Scheduler] 만료 처리 실패 - vaId: {}, merchantOrderId: {} (수동 처리 필요)",
+                            va.getId(), va.getMerchantOrderId(), e);
+                }
             }
-        }
 
-        log.info("[VA-Expiry-Scheduler] 만료 처리 완료 - 성공: {}건, 입금충돌스킵: {}건, 실패: {}건",
-                success, skipped, fail);
+            totalSuccess += success;
+            totalSkipped += skipped;
+            totalFail += fail;
+
+            // 처리 후 첫 페이지를 반복 조회 (만료된 건은 결과에서 사라지므로 offset 불필요)
+        } while (page.hasNext());
+
+        if (totalSuccess + totalSkipped + totalFail > 0) {
+            log.info("[VA-Expiry-Scheduler] 만료 처리 완료 - 성공: {}건, 입금충돌스킵: {}건, 실패: {}건",
+                    totalSuccess, totalSkipped, totalFail);
+        } else {
+            log.debug("[VA-Expiry-Scheduler] 만료 대상 없음");
+        }
     }
 }

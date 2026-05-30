@@ -13,6 +13,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import java.util.HexFormat;
 import java.util.List;
 
@@ -101,8 +104,8 @@ public class WebhookRetryService {
         deadLetterRepository.save(deadLetter);
     }
 
-    public List<WebhookDeadLetter> findPending() {
-        return deadLetterRepository.findByStatusOrderByCreatedAtAsc(WebhookDeadLetterStatus.PENDING);
+    public List<WebhookDeadLetter> findPending(Pageable pageable) {
+        return deadLetterRepository.findByStatus(WebhookDeadLetterStatus.PENDING, pageable).getContent();
     }
 
     private String hmacSha256(String secret, String data) throws Exception {

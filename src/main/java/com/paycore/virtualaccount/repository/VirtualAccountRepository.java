@@ -2,6 +2,8 @@ package com.paycore.virtualaccount.repository;
 
 import com.paycore.virtualaccount.domain.VirtualAccount;
 import com.paycore.virtualaccount.domain.VirtualAccountStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.LocalDateTime;
@@ -16,4 +18,7 @@ public interface VirtualAccountRepository extends JpaRepository<VirtualAccount, 
 
     /** 만료 스케줄러용: ISSUED 상태이면서 입금 기한이 지난 건 조회 */
     List<VirtualAccount> findByStatusAndDueDateBefore(VirtualAccountStatus status, LocalDateTime threshold);
+
+    /** 페이지 기반 배치 조회 (대량 처리 스케줄러용) */
+    Page<VirtualAccount> findByStatusAndDueDateBefore(VirtualAccountStatus status, LocalDateTime threshold, Pageable pageable);
 }
