@@ -1,0 +1,31 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /app/logs/paycore.log
+      - /app/logs/paycore.*.log
+    # JSON 한 줄 = 한 이벤트 (LogstashEncoder 출력 형식)
+    json.keys_under_root: false
+    json.overwrite_keys: false
+    multiline.type: pattern
+    multiline.pattern: '^\{'
+    multiline.negate: true
+    multiline.match: after
+    fields:
+      log_source: paycore-app
+    fields_under_root: false
+
+# Logstash로 전송 (Elasticsearch 직접 전송 대신 Logstash 경유로 필터링 적용)
+output.logstash:
+  hosts: ["logstash:5044"]
+  bulk_max_size: 2048
+
+# 처리 상태 저장 경로 (컨테이너 재시작 시 중복 수집 방지)
+filebeat.registry.path: /usr/share/filebeat/data/registry
+
+logging.level: warning
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat.log
+  keepfiles: 3
