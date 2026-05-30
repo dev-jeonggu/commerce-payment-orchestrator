@@ -46,7 +46,7 @@ public class Payment {
     @Column(name = "paid_amount", nullable = false)
     private Long paidAmount;
 
-    @Column(name = "cancelled_amount")
+    @Column(name = "cancelled_amount", nullable = false, columnDefinition = "bigint default 0")
     private Long cancelledAmount;
 
     @Enumerated(EnumType.STRING)
